@@ -1,7 +1,9 @@
 .env
 __pycache__/
 *.pyc
-output/
+output/*
+!output/.gitkeep
 .storage_state.json
 .venv/
 .superpowers/
+*.egg-info/

@@ -1,6 +1,4 @@
-def main() -> None:
-    raise SystemExit("not implemented yet — run after Task 7")
-
+from crawlfb.cli import main
 
 if __name__ == "__main__":
     main()
