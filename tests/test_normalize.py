@@ -47,7 +47,7 @@ def test_normalize_post_maps_all_fields():
 
 # --- Fixture-driven extraction + flattening (plan Task 4, steps 5-6) ---
 
-from crawlfb.intercept import extract_stories, flatten
+from crawlfb.intercept import extract_stories, flatten, split_json_values
 
 FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "feed_graphql.json").read_text(encoding="utf-8")
@@ -60,7 +60,43 @@ def test_extract_stories_finds_at_least_one():
     assert len(nodes) >= 1
     assert all("post_id" in flatten(n, "", "") for n in nodes)
 
+REF = json.loads(
+    (Path(__file__).parent.parent / "CotSongGenZ_Page.json").read_text(encoding="utf-8")
+)[0]
+
 def test_flatten_roundtrip_matches_reference_shape():
     post = normalize_post(flatten(extract_stories(FIXTURE[0]["body"])[0], "", "CotSongGenZ.Page"),
                           "https://www.facebook.com/CotSongGenZ.Page/", "CotSongGenZ.Page")
-    assert set(post.model_dump().keys()) == set(Post.model_validate({}).model_dump().keys())
+    assert set(post.model_dump().keys()) == set(REF.keys())
+
+def test_split_json_values_splits_concatenated():
+    assert split_json_values('{"a":1}\n{"b":2}') == [{"a": 1}, {"b": 2}]
+    assert len(split_json_values('{"a":1}   \n  {"b":2}\n')) == 2
+
+def test_extract_stories_dedupes_in_order():
+    nodes = extract_stories(FIXTURE[0]["body"])
+    assert len(nodes) == 3
+    assert len({n["post_id"] for n in nodes}) == len(nodes)
+    all_nodes = []
+    for entry in FIXTURE:
+        all_nodes += extract_stories(entry["body"])
+    assert len(all_nodes) == 6
+    assert len({n["post_id"] for n in all_nodes}) == 6
+
+def test_flatten_extracts_media():
+    all_nodes = [n for entry in FIXTURE for n in extract_stories(entry["body"])]
+    story = next(n for n in all_nodes if flatten(n, "", "")["media"])
+    media = flatten(story, "", "")["media"][0]
+    assert media["__typename"] == "Photo"
+    assert media["photo_image"]["uri"].startswith("https://scontent")
+    assert media["photo_image"]["height"] > 0
+    assert media["photo_image"]["width"] > 0
+    assert isinstance(media["id"], str) and media["id"]
+    assert isinstance(media["url"], str) and media["url"]
+    assert media["feedback"]["id"]
+
+def test_flatten_maps_care_reaction():
+    all_nodes = [n for entry in FIXTURE for n in extract_stories(entry["body"])]
+    care = next(n for n in all_nodes if flatten(n, "", "").get("reaction_counts", {}).get("CARE"))
+    assert care["post_id"] == "1377401131262886"
+    assert flatten(care, "", "")["reaction_counts"]["CARE"] == 5
