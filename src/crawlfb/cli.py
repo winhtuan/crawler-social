@@ -1,18 +1,57 @@
 from __future__ import annotations
 import argparse
 import asyncio
+import json
+import os
 from pathlib import Path
-from crawlfb.config import Config
+from dotenv import load_dotenv
+from crawlfb.config import Config, Proxy
 from crawlfb.stealth import launch_context
 from crawlfb.intercept import FeedInterceptor
 from crawlfb.paginate import collect_posts
 from crawlfb.writer import write_posts
 
 
+def _page_id(url: str) -> str:
+    """Page id from a URL: the last segment after / (trailing slash stripped)."""
+    return url.rstrip("/").rsplit("/", 1)[-1] or "page"
+
+
+def _load_pages(path: str | Path) -> list[tuple[str, str]]:
+    """Read a page list from a JSON file, returning [(id, url)].
+
+    Accepts either shape: {"pages": [...]} or a bare array [...].
+    Each item is a URL string, or an object {"id": str, "url": str}.
+    """
+    p = Path(path)
+    if not p.exists():
+        return []
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        return []
+    if isinstance(raw, dict):
+        raw = raw.get("pages", [])
+    if not isinstance(raw, list):
+        return []
+    out: list[tuple[str, str]] = []
+    for item in raw:
+        if isinstance(item, str):
+            out.append((_page_id(item), item))
+        elif isinstance(item, dict) and item.get("url"):
+            pid = str(item.get("id") or _page_id(item["url"]))
+            out.append((pid, item["url"]))
+    return out
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Crawl public Facebook page posts")
-    p.add_argument("--page", required=True, help="public page URL")
-    p.add_argument("--output", required=True, help="output JSON path")
+    p.add_argument("--page", default=None,
+                   help="single public page URL (bỏ qua --pages-file)")
+    p.add_argument("--pages-file", default="data/fb_pages.json",
+                   help="JSON list of pages to crawl (default data/fb_pages.json)")
+    p.add_argument("--output", default="output",
+                   help="output directory; mỗi page ghi output/{id}.json")
     p.add_argument("--max-posts", type=int, default=50)
     p.add_argument("--headless", action="store_true", default=True)
     p.add_argument("--headed", dest="headless", action="store_false",
@@ -25,40 +64,16 @@ def parse_args() -> argparse.Namespace:
 
 
 async def _trigger_feed(page) -> None:
-    """Best-effort interaction to force the logged-out feed's /api/graphql/
-    requests to fire. A logged-out Facebook page inlines the feed in HTML and
-    emits ZERO /api/graphql/ on passive load or scroll (empirical, Task 3) —
-    the feed GraphQL only fires after interaction. This replicates
-    tools/capture_feed.py (proven to work). Every step is wrapped so a missing
-    selector never crashes the run; the interceptor + scroll loop still run
-    even if the trigger fully fails."""
-    try:
-        await page.wait_for_selector('[role="article"]', timeout=30000)
-    except Exception:
-        pass
-    # Dismiss the login dialog.
+    """Dismiss any login/consent dialog. The /posts/ feed paginates on scroll
+    on its own (logged-in); no reaction flyout / post click needed — those open
+    modals that block the scroll loop. Every step is wrapped so a missing
+    dialog never crashes the run."""
     for _ in range(2):
         try:
             await page.keyboard.press("Escape")
         except Exception:
             pass
         await asyncio.sleep(0.5)
-    # Open the reaction-count flyout.
-    for label in ("Tất cả cảm xúc", "Bình luận"):
-        try:
-            el = page.get_by_text(label, exact=False).first
-            if await el.count():
-                await el.click(timeout=4000, force=True)
-                await asyncio.sleep(6)
-                break
-        except Exception:
-            pass
-    # Click a post to open the post permalink view.
-    try:
-        await page.locator('[role="article"]').first.click(timeout=4000, force=True)
-        await asyncio.sleep(6)
-    except Exception:
-        pass
 
 
 async def run(cfg: Config) -> None:
@@ -66,7 +81,10 @@ async def run(cfg: Config) -> None:
         page_name = cfg.page_url.rstrip("/").rsplit("/", 1)[-1]
         interceptor = FeedInterceptor(page, page_name=page_name)
         interceptor.attach()
-        await page.goto(cfg.normalized_page_url(), wait_until="networkidle", timeout=60000)
+        # The page's /posts/ tab is the paginated feed; the base page URL only
+        # shows a short recent-posts preview that doesn't infinite-scroll.
+        posts_url = cfg.normalized_page_url() + "posts/"
+        await page.goto(posts_url, wait_until="networkidle", timeout=60000)
         await _trigger_feed(page)
         posts = await collect_posts(page, interceptor, cfg)
     added = write_posts(posts, Path(cfg.output))
@@ -74,8 +92,33 @@ async def run(cfg: Config) -> None:
 
 
 def main() -> None:
-    cfg = Config.from_args(parse_args())
-    asyncio.run(run(cfg))
+    args = parse_args()
+    load_dotenv()
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.page:
+        tasks = [(_page_id(args.page), args.page)]
+    else:
+        tasks = _load_pages(args.pages_file)
+
+    if not tasks:
+        print(f"no pages to crawl (--page empty and {args.pages_file} has none)")
+        return
+
+    for pid, url in tasks:
+        cfg = Config(
+            page_url=url,
+            output=str(output_dir / f"{pid}.json"),
+            max_posts=args.max_posts,
+            headless=args.headless,
+            proxy=Proxy.from_url(args.proxy or os.getenv("FB_PROXY")),
+            delay_base=args.delay_base,
+            delay_jitter=args.delay_jitter,
+            storage_state=args.storage_state or os.getenv("FB_STORAGE_STATE"),
+        )
+        print(f"\n== crawling {url} -> {cfg.output}")
+        asyncio.run(run(cfg))
 
 
 if __name__ == "__main__":
