@@ -20,6 +20,38 @@ window.chrome = {runtime: {}};
 """
 
 
+_SAMESITE_MAP = {
+    "no_restriction": "None",
+    "lax": "Lax",
+    "strict": "Strict",
+}
+
+
+def _convert_cookie_editor(cookies: list) -> dict:
+    """Cookie-Editor / EditThisCookie export -> Playwright storage_state.
+
+    Chrome cookie fields (sameSite: no_restriction|lax|strict, expirationDate,
+    session) don't match Playwright's shape (sameSite: Strict|Lax|None,
+    expires). Map each cookie, drop foreign keys, skip entries missing
+    name/value."""
+    converted = []
+    for c in cookies:
+        if not isinstance(c, dict) or "name" not in c or "value" not in c:
+            continue
+        same_site = c.get("sameSite")
+        converted.append({
+            "name": c.get("name"),
+            "value": c.get("value"),
+            "domain": c.get("domain", ""),
+            "path": c.get("path", "/"),
+            "expires": -1 if c.get("session") else c.get("expirationDate", -1),
+            "httpOnly": bool(c.get("httpOnly", False)),
+            "secure": bool(c.get("secure", False)),
+            "sameSite": _SAMESITE_MAP.get(same_site, "Lax"),
+        })
+    return {"cookies": converted}
+
+
 def _load_storage_state(path: str | None) -> dict | None:
     if not path:
         return None
@@ -30,9 +62,9 @@ def _load_storage_state(path: str | None) -> dict | None:
     if isinstance(raw, dict):
         return raw
     # Cookie-Editor / EditThisCookie export is a bare array of cookie objects;
-    # wrap it into Playwright's {cookies: [...]} storage_state shape.
+    # convert it into Playwright's {cookies: [...]} storage_state shape.
     if isinstance(raw, list):
-        return {"cookies": raw}
+        return _convert_cookie_editor(raw)
     return None
 
 
