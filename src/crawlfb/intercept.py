@@ -2,8 +2,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from typing import Optional
-from crawlfb.models import Post
-from crawlfb.normalize import normalize_post
 
 # Stable Facebook reaction IDs (empirical from the captured feed fixture).
 _REACTION_ID_MAP = {
@@ -147,52 +145,84 @@ def _share_count(fb) -> int:
     return _to_int(_deep_get(fb, "share_count", "count"))
 
 
-def _media(node: dict) -> list:
-    """Best-effort media extraction: Photo/Video nodes under attachments that
-    carry a photo_image uri. Defaults to []."""
-    media = []
+def _views(fb) -> int:
+    """Video view count. Prefer the top-level video_view_count, then the
+    renderer's, then play_count as a last resort."""
+    v = _deep_get(fb, "video_view_count")
+    if v is not None:
+        return _to_int(v)
+    renderer = _deep_get(fb, "video_view_count_renderer", "feedback") or {}
+    v = _deep_get(renderer, "video_view_count")
+    if v is not None:
+        return _to_int(v)
+    v = _deep_get(renderer, "play_count")
+    if v is not None:
+        return _to_int(v)
+    return 0
+
+
+def _is_video(node: dict, fb) -> bool:
+    if _deep_get(fb, "associated_video", "id"):
+        return True
+    if _deep_get(fb, "video_view_count") is not None:
+        return True
     for att in node.get("attachments") or []:
         if not isinstance(att, dict):
             continue
-        m = att.get("media") or {}
-        # The shallow attachments[*].media node carries no image data; the full
-        # node (photo_image, url, feedback) lives at styles.attachment.media.
-        if not isinstance(m, dict) or not (m.get("photo_image") or {}).get("uri"):
-            styles = att.get("styles") or {}
-            attachment = styles.get("attachment") or {}
-            alt = attachment.get("media")
-            if isinstance(alt, dict):
-                m = alt
+        m = _deep_get(att, "styles", "attachment", "media") or att.get("media") or {}
+        if (m.get("__typename") or "") == "Video":
+            return True
+    return False
+
+
+def _attachments(node: dict) -> list:
+    """Map Story attachments to the flat {thumbnail,url,type,id,ocr_text}
+    shape. The full media node lives at styles.attachment.media (the shallow
+    attachments[*].media carries only __typename/id)."""
+    out = []
+    for att in node.get("attachments") or []:
+        if not isinstance(att, dict):
+            continue
+        styles = att.get("styles") or {}
+        m = _deep_get(styles, "attachment", "media")
+        if not isinstance(m, dict):
+            m = att.get("media")
         if not isinstance(m, dict):
             continue
-        img = m.get("photo_image") or {}
-        if not img.get("uri"):
-            continue
-        fb = m.get("feedback") or {}
-        media.append({
-            "thumbnail": m.get("thumbnail"),
-            "__typename": m.get("__typename"),
-            "__isMedia": m.get("__isMedia"),
-            "accent_color": m.get("accent_color"),
-            "photo_product_tags": m.get("photo_product_tags") or [],
-            "photo_image": {
-                "uri": img.get("uri"),
-                "height": img.get("height"),
-                "width": img.get("width"),
-            },
-            "url": m.get("url"),
-            "id": str(m["id"]) if m.get("id") else None,
-            "feedback": {
-                "can_viewer_comment": bool(fb.get("can_viewer_comment", False)),
-                "id": fb.get("id"),
-            },
-            "ocr_text": m.get("ocr_text"),
-        })
-    return media
+        typename = m.get("__typename") or ""
+        mid = str(m["id"]) if m.get("id") else None
+        if typename == "Photo":
+            img = m.get("photo_image") or {}
+            if not img.get("uri"):
+                continue
+            out.append({
+                "thumbnail": img.get("uri"),
+                "url": m.get("url"),
+                "type": "Photo",
+                "id": mid,
+                "ocr_text": m.get("ocr_text"),
+            })
+        elif typename == "Video":
+            thumb = m.get("thumbnailImage") or {}
+            out.append({
+                "thumbnail": thumb.get("uri"),
+                "url": m.get("url") or _deep_get(styles, "attachment", "url"),
+                "type": "Video",
+                "id": mid,
+                "ocr_text": None,
+            })
+    return out
+
+
+def is_reel(raw: dict) -> bool:
+    """True when a flattened Story is a reel (its permalink points at /reel/).
+    Reels are dropped from output — their comments live in a drawer, not inline
+    like a regular post (see docs/adr/0002-exclude-reels.md)."""
+    return "/reel/" in (raw.get("permalink_url") or "")
 
 
 def flatten(node: dict, page_id: str, page_name: str) -> dict:
-    """Map one raw Story node to the RawStory contract (plan Task 4)."""
+    """Map one raw Story node to the flat RawStory contract."""
     post_id = str(node.get("post_id") or "")
     actors = node.get("actors") or []
     author = actors[0] if actors else {}
@@ -212,6 +242,7 @@ def flatten(node: dict, page_id: str, page_name: str) -> dict:
         except (TypeError, ValueError, OSError):
             created_unix = 0
 
+    text = _deep_get(node, "comet_sections", "content", "story", "message", "text") or ""
     fb = _feedback(node)
     return {
         "post_id": post_id,
@@ -220,14 +251,16 @@ def flatten(node: dict, page_id: str, page_name: str) -> dict:
         "author_name": author.get("name") or "",
         "author_profile_url": author_profile_url,
         "author_profile_pic": "",
-        "text": _deep_get(node, "comet_sections", "content", "story", "message", "text") or "",
+        "text": text,
         "created_time_iso": created_time_iso,
         "created_unix": created_unix,
         "reaction_counts": _reaction_counts(fb),
         "comment_count": _comment_count(fb),
         "share_count": _share_count(fb),
         "permalink_url": node.get("permalink_url") or "",
-        "media": _media(node),
+        "attachments": _attachments(node),
+        "is_video": _is_video(node, fb),
+        "views": _views(fb),
     }
 
 
@@ -239,7 +272,7 @@ class FeedInterceptor:
         self._page_id = page_id
         self._page_name = page_name
         self._seen: set[str] = set()
-        self.posts: list[dict] = []  # RawStory dicts, ordered, deduped
+        self.posts: list[dict] = []  # flattened RawStory dicts, ordered, deduped
 
     def attach(self) -> None:
         self._page.on("response", self._on_response)
@@ -260,6 +293,3 @@ class FeedInterceptor:
             if pid and pid not in self._seen:
                 self._seen.add(pid)
                 self.posts.append(raw)
-
-    def to_models(self, input_url: str) -> list[Post]:
-        return [normalize_post(r, input_url, self._page_name) for r in self.posts]

@@ -1,7 +1,6 @@
-import base64
 import json
 from pathlib import Path
-from crawlfb.normalize import normalize_post, feedback_id, top_level_url
+from crawlfb.normalize import normalize_post
 from crawlfb.models import Post
 
 RAW = {
@@ -10,7 +9,7 @@ RAW = {
     "author_id": "100069790373758",
     "author_name": "Cột Sống Gen Z",
     "author_profile_url": "https://www.facebook.com/100069790373758",
-    "author_profile_pic": "https://scontent/avatar.png",
+    "author_profile_pic": "",
     "text": "Tỏ tình xong hắc “hoá” luôn\n\n#cotsonggenzpage",
     "created_time_iso": "2026-08-10T08:40:48.000Z",
     "created_unix": 1786351248,
@@ -18,40 +17,65 @@ RAW = {
     "comment_count": 1,
     "share_count": 1,
     "permalink_url": "https://www.facebook.com/CotSongGenZ.Page/posts/pfbid0Fjq",
-    "media": [],
+    "attachments": [],
+    "is_video": False,
+    "views": 0,
 }
 
-def test_feedback_id_is_base64_of_feedback_colon_postid():
-    expected = base64.b64encode(b"feedback:1360424439627222").decode()
-    assert feedback_id("1360424439627222") == expected
-
-def test_top_level_url_is_computed():
-    assert top_level_url("100069790373758", "1360424439627222") == \
-        "https://www.facebook.com/100069790373758/posts/1360424439627222"
 
 def test_normalize_post_maps_all_fields():
-    post = normalize_post(RAW, "https://www.facebook.com/CotSongGenZ.Page/", "CotSongGenZ.Page")
-    assert post.postId == "1360424439627222"
-    assert post.feedbackId == feedback_id("1360424439627222")
-    assert post.topLevelUrl == top_level_url("100069790373758", "1360424439627222")
-    assert post.facebookId == "100069790373758"
-    assert post.user.name == "Cột Sống Gen Z"
-    assert post.likes == 137
-    assert post.topReactionsCount == 4
-    assert post.reactionHahaCount == 69
-    assert post.reactionLikeCount == 58
-    assert post.reactionSadCount == 9
-    assert post.reactionLoveCount == 1
-    assert post.inputUrl == "https://www.facebook.com/CotSongGenZ.Page/"
-    assert post.facebookUrl == "https://www.facebook.com/CotSongGenZ.Page/"
+    post = normalize_post(RAW, "CotSongGenZ.Page")
+    assert post.post_id == "1360424439627222"
+    assert post.facebook_url == RAW["permalink_url"]
+    assert post.author == "Cột Sống Gen Z"
+    assert post.page_name == "CotSongGenZ.Page"
+    assert post.timestamp == "2026-08-10T08:40:48.000Z"
+    assert post.likes == 137  # 58 + 1 + 69 + 9
+    assert post.comments == 1
+    assert post.shares == 1
+    assert post.reactions == {"like": 58, "love": 1, "haha": 69, "sad": 9}
+    assert post.top_reactions_count == 4
+    assert post.is_video is False
+    assert post.views == 0
+    assert post.hashtags == ["#cotsonggenzpage"]
+    assert post.comments_list == []
+    assert post.top_comments == []
 
-# --- Fixture-driven extraction + flattening (plan Task 4, steps 5-6) ---
 
-from crawlfb.intercept import extract_stories, flatten, split_json_values
+def test_normalize_likes_sums_all_reaction_types():
+    raw = dict(RAW, reaction_counts={
+        "LIKE": 58, "LOVE": 1, "HAHA": 69, "SAD": 9, "CARE": 5, "WOW": 2, "ANGRY": 3,
+    })
+    post = normalize_post(raw, "CotSongGenZ.Page")
+    assert post.likes == 58 + 1 + 69 + 9 + 5 + 2 + 3
+    assert post.top_reactions_count == 7
+
+
+def test_normalize_post_attaches_comments_and_top_comment():
+    comments = [
+        {"comment_id": "1", "text": "hay", "author": "A", "likes": 5,
+         "date": "2026-08-10T09:00:00.000Z", "threading_depth": 0,
+         "comment_url": "https://x/?comment_id=1"},
+        {"comment_id": "2", "text": "ok", "author": "B", "likes": 2,
+         "date": "2026-08-10T09:01:00.000Z", "threading_depth": 0,
+         "comment_url": "https://x/?comment_id=2"},
+    ]
+    post = normalize_post(RAW, "CotSongGenZ.Page", comments)
+    assert [c.comment_id for c in post.comments_list] == ["1", "2"]
+    assert len(post.top_comments) == 1
+    assert post.top_comments[0].text == "hay"
+    assert post.top_comments[0].author == "A"
+    assert post.top_comments[0].likes == 5
+
+
+# --- Fixture-driven extraction + flattening ---
+
+from crawlfb.intercept import extract_stories, flatten, split_json_values, is_reel
 
 FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "feed_graphql.json").read_text(encoding="utf-8")
 )
+
 
 def test_extract_stories_finds_at_least_one():
     nodes = []
@@ -60,18 +84,11 @@ def test_extract_stories_finds_at_least_one():
     assert len(nodes) >= 1
     assert all("post_id" in flatten(n, "", "") for n in nodes)
 
-REF = json.loads(
-    (Path(__file__).parent.parent / "CotSongGenZ_Page.json").read_text(encoding="utf-8")
-)[0]
-
-def test_flatten_roundtrip_matches_reference_shape():
-    post = normalize_post(flatten(extract_stories(FIXTURE[0]["body"])[0], "", "CotSongGenZ.Page"),
-                          "https://www.facebook.com/CotSongGenZ.Page/", "CotSongGenZ.Page")
-    assert set(REF.keys()) <= set(post.model_dump().keys())
 
 def test_split_json_values_splits_concatenated():
     assert split_json_values('{"a":1}\n{"b":2}') == [{"a": 1}, {"b": 2}]
     assert len(split_json_values('{"a":1}   \n  {"b":2}\n')) == 2
+
 
 def test_extract_stories_dedupes_in_order():
     nodes = extract_stories(FIXTURE[0]["body"])
@@ -83,17 +100,27 @@ def test_extract_stories_dedupes_in_order():
     assert len(all_nodes) == 6
     assert len({n["post_id"] for n in all_nodes}) == 6
 
-def test_flatten_extracts_media():
+
+def test_flatten_extracts_attachments():
     all_nodes = [n for entry in FIXTURE for n in extract_stories(entry["body"])]
-    story = next(n for n in all_nodes if flatten(n, "", "")["media"])
-    media = flatten(story, "", "")["media"][0]
-    assert media["__typename"] == "Photo"
-    assert media["photo_image"]["uri"].startswith("https://scontent")
-    assert media["photo_image"]["height"] > 0
-    assert media["photo_image"]["width"] > 0
-    assert isinstance(media["id"], str) and media["id"]
-    assert isinstance(media["url"], str) and media["url"]
-    assert media["feedback"]["id"]
+    story = next(n for n in all_nodes if flatten(n, "", "")["attachments"])
+    att = flatten(story, "", "")["attachments"][0]
+    assert att["type"] in ("Photo", "Video")
+    assert att["id"]
+    if att["type"] == "Photo":
+        assert att["thumbnail"].startswith("https://scontent")
+        assert att["url"].startswith("https://www.facebook.com/photo/")
+    else:
+        assert att["url"].startswith("https://www.facebook.com/reel/")
+
+
+def test_flatten_extracts_video_views():
+    all_nodes = [n for entry in FIXTURE for n in extract_stories(entry["body"])]
+    video = next(n for n in all_nodes if flatten(n, "", "")["is_video"])
+    flat = flatten(video, "", "")
+    assert flat["is_video"] is True
+    assert flat["views"] > 0
+
 
 def test_flatten_maps_care_reaction():
     all_nodes = [n for entry in FIXTURE for n in extract_stories(entry["body"])]
@@ -101,12 +128,6 @@ def test_flatten_maps_care_reaction():
     assert care["post_id"] == "1377401131262886"
     assert flatten(care, "", "")["reaction_counts"]["CARE"] == 5
 
-def test_normalize_likes_sums_all_reaction_types():
-    raw = dict(RAW, reaction_counts={"LIKE": 58, "LOVE": 1, "HAHA": 69, "SAD": 9,
-                                     "CARE": 5, "WOW": 2, "ANGRY": 3})
-    post = normalize_post(raw, "https://www.facebook.com/CotSongGenZ.Page/", "CotSongGenZ.Page")
-    assert post.likes == 58 + 1 + 69 + 9 + 5 + 2 + 3
-    assert post.topReactionsCount == 7
 
 def test_flatten_share_count_non_int_degrades():
     node = {
@@ -133,6 +154,12 @@ def _node_with_fb(fb):
             }}
         }}}}},
     }
+
+
+def test_is_reel_detects_reel_permalink():
+    assert is_reel({"permalink_url": "https://www.facebook.com/reel/1728723268179986/"}) is True
+    assert is_reel({"permalink_url": "https://www.facebook.com/CotSongGenZ.Page/posts/pfbid0vzZ/"}) is False
+    assert is_reel({}) is False
 
 
 def test_flatten_logged_in_comment_and_share_count():

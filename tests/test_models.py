@@ -1,45 +1,66 @@
 import json
-from pathlib import Path
-from crawlfb.models import Post
+from crawlfb.models import Post, Comment
 
-REF = json.loads(
-    (Path(__file__).parent.parent / "CotSongGenZ_Page.json").read_text(encoding="utf-8")
-)[0]
 
-def test_post_parses_reference_json():
-    post = Post.model_validate(REF)
-    assert post.postId == "1360424439627222"
-    assert post.pageName == "CotSongGenZ.Page"
-    assert post.text.startswith("Tỏ tình xong hắc")
-    assert post.likes == 137
-    assert post.reactionHahaCount == 69
-    assert post.reactionLikeCount == 58
-    assert post.reactionSadCount == 9
-    assert post.reactionLoveCount == 1
-    assert post.topReactionsCount == 4
-    assert post.comments == 1
-    assert post.shares == 1
-    assert post.paidPartnership is False
-    assert post.user.id == "100069790373758"
-    assert post.user.name == "Cột Sống Gen Z"
+SAMPLE = {
+    "facebook_url": "https://www.facebook.com/reel/1443385994361034/",
+    "text": "2 đứa hạnh phúc quá dọ",
+    "author": "Cột sống GenZ",
+    "page_name": "cotsongGenZ.YAN",
+    "timestamp": "2026-08-30T07:20:25.000Z",
+    "likes": 25,
+    "comments": 0,
+    "shares": 0,
+    "reactions": {"like": 24, "care": 1},
+    "top_reactions_count": 2,
+    "top_comments": [],
+    "comments_list": [],
+    "is_video": True,
+    "views": 183,
+    "hashtags": ["#cotsongGenZ"],
+    "attachments": [
+        {
+            "thumbnail": "https://scontent/thumb.jpg",
+            "url": "https://www.facebook.com/reel/1443385994361034/",
+            "type": "Video",
+            "id": "1443385994361034",
+            "ocr_text": None,
+        }
+    ],
+    "post_id": "1122166163469529",
+}
 
-def test_post_roundtrip_preserves_top_level_keys():
-    post = Post.model_validate(REF)
+
+def test_post_parses_sample_format():
+    post = Post.model_validate(SAMPLE)
+    assert post.post_id == "1122166163469529"
+    assert post.facebook_url == "https://www.facebook.com/reel/1443385994361034/"
+    assert post.author == "Cột sống GenZ"
+    assert post.is_video is True
+    assert post.views == 183
+    assert post.reactions == {"like": 24, "care": 1}
+    assert post.top_reactions_count == 2
+    assert post.attachments[0].type == "Video"
+    assert post.attachments[0].id == "1443385994361034"
+
+
+def test_post_roundtrip_preserves_sample_keys():
+    post = Post.model_validate(SAMPLE)
     dumped = post.model_dump()
-    assert set(REF.keys()) <= set(dumped.keys())
+    assert set(SAMPLE.keys()) <= set(dumped.keys())
 
-def test_media_parses_reference_json():
-    post = Post.model_validate(REF)
-    assert len(post.media) == 1
-    m = post.media[0]
-    assert m.__typename == "Photo"
-    assert m.__isMedia == "Photo"
-    assert m.photo_image.uri.startswith("https://scontent")
-    assert m.photo_image.height == 526
-    assert m.photo_image.width == 526
-    assert "May be an image of text" in m.ocrText
 
-def test_post_has_comments_extension_point():
-    post = Post.model_validate(REF)
-    assert post.commentsData == []
-    assert post.comments == 1
+def test_comment_model_shape():
+    c = Comment(
+        comment_id="1847898512838593",
+        text="hay quá",
+        author="Van Vo Thanh",
+        likes=12,
+        date="2026-08-30T05:28:26.000Z",
+        threading_depth=0,
+        comment_url="https://www.facebook.com/reel/1088606917027756/?comment_id=1847898512838593",
+    )
+    d = c.model_dump()
+    assert set(d.keys()) == {
+        "comment_id", "text", "author", "likes", "date", "threading_depth", "comment_url",
+    }

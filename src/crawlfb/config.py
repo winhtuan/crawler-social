@@ -37,6 +37,7 @@ class Config:
     page_url: str
     output: str
     max_posts: int = 50
+    max_comments: int = 0  # 0 = no cap (scrape all)
     headless: bool = True
     proxy: Proxy | None = None
     delay_base: float = 3.0
