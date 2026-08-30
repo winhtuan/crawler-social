@@ -27,7 +27,13 @@ def _load_storage_state(path: str | None) -> dict | None:
         raw = json.loads(open(path, encoding="utf-8").read())
     except (FileNotFoundError, json.JSONDecodeError):
         return None
-    return raw if isinstance(raw, dict) else None
+    if isinstance(raw, dict):
+        return raw
+    # Cookie-Editor / EditThisCookie export is a bare array of cookie objects;
+    # wrap it into Playwright's {cookies: [...]} storage_state shape.
+    if isinstance(raw, list):
+        return {"cookies": raw}
+    return None
 
 
 @asynccontextmanager
@@ -49,9 +55,12 @@ async def launch_context(cfg: Config) -> AsyncIterator[tuple[BrowserContext, Pag
         try:
             yield context, page
         finally:
-            if cfg.storage_state:
-                state = await context.storage_state()
-                with open(cfg.storage_state, "w", encoding="utf-8") as f:
-                    json.dump(state, f)
+            if cfg.storage_state and storage_state is not None:
+                try:
+                    state = await context.storage_state()
+                    with open(cfg.storage_state, "w", encoding="utf-8") as f:
+                        json.dump(state, f)
+                except (OSError, IOError):
+                    pass
             await context.close()
             await browser.close()

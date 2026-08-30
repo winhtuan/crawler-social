@@ -18,10 +18,14 @@ def test_proxy_to_playwright_dict():
 def test_load_storage_state_guards_shape(tmp_path):
     # missing file -> None
     assert _load_storage_state(str(tmp_path / "missing.json")) is None
-    # file containing a JSON list -> None (list is not a Playwright storageState)
+    # bare cookie array (Cookie-Editor export) -> wrapped into Playwright shape
     list_path = tmp_path / "list.json"
     list_path.write_text(json.dumps([{"name": "x"}]), encoding="utf-8")
-    assert _load_storage_state(str(list_path)) is None
+    assert _load_storage_state(str(list_path)) == {"cookies": [{"name": "x"}]}
+    # JSON scalar -> None (not a storageState shape)
+    scalar_path = tmp_path / "scalar.json"
+    scalar_path.write_text(json.dumps(42), encoding="utf-8")
+    assert _load_storage_state(str(scalar_path)) is None
     # well-formed object -> returned as-is
     dict_path = tmp_path / "ok.json"
     dict_path.write_text(json.dumps({"cookies": [], "origins": []}), encoding="utf-8")

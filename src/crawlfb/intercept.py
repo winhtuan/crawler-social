@@ -190,6 +190,10 @@ def flatten(node: dict, page_id: str, page_name: str) -> dict:
             created_unix = 0
 
     fb = _feedback(node)
+    try:
+        share_count = int(_deep_get(fb, "share_count", "count") or 0)
+    except (TypeError, ValueError):
+        share_count = 0
     return {
         "post_id": post_id,
         "page_id": resolved_page_id,
@@ -202,7 +206,7 @@ def flatten(node: dict, page_id: str, page_name: str) -> dict:
         "created_unix": created_unix,
         "reaction_counts": _reaction_counts(fb),
         "comment_count": _comment_count(fb),
-        "share_count": int(_deep_get(fb, "share_count", "count") or 0),
+        "share_count": share_count,
         "permalink_url": node.get("permalink_url") or "",
         "media": _media(node),
     }
@@ -229,7 +233,10 @@ class FeedInterceptor:
         except Exception:
             return
         for node in extract_stories(split_json_values(text)):
-            raw = flatten(node, self._page_id or "", self._page_name)
+            try:
+                raw = flatten(node, self._page_id or "", self._page_name)
+            except Exception:
+                continue
             pid = raw.get("post_id")
             if pid and pid not in self._seen:
                 self._seen.add(pid)

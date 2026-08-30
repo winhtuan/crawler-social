@@ -63,11 +63,7 @@ def normalize_post(raw: dict, input_url: str, page_name: str) -> Post:
         facebookId=page_id,
         inputUrl=input_url,
     )
-    post.likes = sum(post.model_dump().get(k, 0) for k in (
-        "reactionHahaCount", "reactionLikeCount", "reactionSadCount", "reactionLoveCount",
-    ))
-    post.topReactionsCount = sum(
-        1 for v in (post.reactionHahaCount, post.reactionLikeCount,
-                    post.reactionSadCount, post.reactionLoveCount) if v > 0
-    )
+    counts = [int(v or 0) for v in reactions.values()]
+    post.likes = sum(v for v in counts if v > 0)
+    post.topReactionsCount = sum(1 for v in counts if v > 0)
     return post

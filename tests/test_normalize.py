@@ -100,3 +100,25 @@ def test_flatten_maps_care_reaction():
     care = next(n for n in all_nodes if flatten(n, "", "").get("reaction_counts", {}).get("CARE"))
     assert care["post_id"] == "1377401131262886"
     assert flatten(care, "", "")["reaction_counts"]["CARE"] == 5
+
+def test_normalize_likes_sums_all_reaction_types():
+    raw = dict(RAW, reaction_counts={"LIKE": 58, "LOVE": 1, "HAHA": 69, "SAD": 9,
+                                     "CARE": 5, "WOW": 2, "ANGRY": 3})
+    post = normalize_post(raw, "https://www.facebook.com/CotSongGenZ.Page/", "CotSongGenZ.Page")
+    assert post.likes == 58 + 1 + 69 + 9 + 5 + 2 + 3
+    assert post.topReactionsCount == 7
+
+def test_flatten_share_count_non_int_degrades():
+    node = {
+        "post_id": "1", "creation_time": 0, "actors": [{"id": "1", "name": "a"}],
+        "comet_sections": {"feedback": {"story": {"story_ufi_container": {"story": {
+            "feedback_context": {"feedback_target_with_context": {
+                "comet_ufi_summary_and_actions_renderer": {"feedback": {
+                    "share_count": {"count": {"bad": True}},
+                    "top_reactions": {"edges": []},
+                }}
+            }}
+        }}}}},
+    }
+    flat = flatten(node, "", "")
+    assert flat["share_count"] == 0
