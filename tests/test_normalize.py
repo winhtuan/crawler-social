@@ -67,7 +67,7 @@ REF = json.loads(
 def test_flatten_roundtrip_matches_reference_shape():
     post = normalize_post(flatten(extract_stories(FIXTURE[0]["body"])[0], "", "CotSongGenZ.Page"),
                           "https://www.facebook.com/CotSongGenZ.Page/", "CotSongGenZ.Page")
-    assert set(post.model_dump().keys()) == set(REF.keys())
+    assert set(REF.keys()) <= set(post.model_dump().keys())
 
 def test_split_json_values_splits_concatenated():
     assert split_json_values('{"a":1}\n{"b":2}') == [{"a": 1}, {"b": 2}]

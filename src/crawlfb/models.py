@@ -46,6 +46,7 @@ class Post(BaseModel):
     text: Optional[str] = None
     likes: int = 0
     comments: int = 0
+    commentsData: list = Field(default_factory=list)
     shares: int = 0
     topReactionsCount: int = 0
     media: list[Media] = Field(default_factory=list)

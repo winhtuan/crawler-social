@@ -26,7 +26,7 @@ def test_post_parses_reference_json():
 def test_post_roundtrip_preserves_top_level_keys():
     post = Post.model_validate(REF)
     dumped = post.model_dump()
-    assert set(dumped.keys()) == set(REF.keys())
+    assert set(REF.keys()) <= set(dumped.keys())
 
 def test_media_parses_reference_json():
     post = Post.model_validate(REF)
@@ -38,3 +38,8 @@ def test_media_parses_reference_json():
     assert m.photo_image.height == 526
     assert m.photo_image.width == 526
     assert "May be an image of text" in m.ocrText
+
+def test_post_has_comments_extension_point():
+    post = Post.model_validate(REF)
+    assert post.commentsData == []
+    assert post.comments == 1
