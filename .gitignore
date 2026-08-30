@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+output/
+.storage_state.json
+.venv/
+.superpowers/
