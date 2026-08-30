@@ -122,3 +122,30 @@ def test_flatten_share_count_non_int_degrades():
     }
     flat = flatten(node, "", "")
     assert flat["share_count"] == 0
+
+
+def _node_with_fb(fb):
+    return {
+        "post_id": "1", "creation_time": 0, "actors": [{"id": "1", "name": "a"}],
+        "comet_sections": {"feedback": {"story": {"story_ufi_container": {"story": {
+            "feedback_context": {"feedback_target_with_context": {
+                "comet_ufi_summary_and_actions_renderer": {"feedback": fb},
+            }}
+        }}}}},
+    }
+
+
+def test_flatten_logged_in_comment_and_share_count():
+    # Logged-in /posts/ feed: counts live under adaptive_ufi_action_renderers,
+    # not the logged-out comments_count_summary_renderer path.
+    fb = {
+        "adaptive_ufi_action_renderers": [
+            {"feedback": {"reaction_count": {"count": 375}}},
+            {"feedback": {"comment_rendering_instance": {"comments": {"total_count": 12}}}},
+            {"feedback": {"share_count": {"count": 7}}},
+        ],
+        "top_reactions": {"edges": []},
+    }
+    flat = flatten(_node_with_fb(fb), "", "")
+    assert flat["comment_count"] == 12
+    assert flat["share_count"] == 7

@@ -113,15 +113,38 @@ def _reaction_counts(fb) -> dict:
     return counts
 
 
-def _comment_count(fb) -> int:
-    total = _deep_get(
-        fb, "comments_count_summary_renderer", "feedback",
-        "comment_rendering_instance", "comments", "total_count",
-    )
+def _to_int(v) -> int:
     try:
-        return int(total or 0)
+        return int(v or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _comment_count(fb) -> int:
+    # Logged-in feed: adaptive_ufi_action_renderers[i].feedback.
+    #                   comment_rendering_instance.comments.total_count
+    for renderer in _deep_get(fb, "adaptive_ufi_action_renderers") or []:
+        total = _deep_get(
+            renderer, "feedback", "comment_rendering_instance", "comments", "total_count"
+        )
+        if total is not None:
+            return _to_int(total)
+    # Logged-out fixture: comments_count_summary_renderer.feedback.
+    #                      comment_rendering_instance.comments.total_count
+    return _to_int(_deep_get(
+        fb, "comments_count_summary_renderer", "feedback",
+        "comment_rendering_instance", "comments", "total_count",
+    ))
+
+
+def _share_count(fb) -> int:
+    # Logged-in feed: adaptive_ufi_action_renderers[i].feedback.share_count.count
+    for renderer in _deep_get(fb, "adaptive_ufi_action_renderers") or []:
+        cnt = _deep_get(renderer, "feedback", "share_count", "count")
+        if cnt is not None:
+            return _to_int(cnt)
+    # Logged-out fixture: share_count.count
+    return _to_int(_deep_get(fb, "share_count", "count"))
 
 
 def _media(node: dict) -> list:
@@ -190,10 +213,6 @@ def flatten(node: dict, page_id: str, page_name: str) -> dict:
             created_unix = 0
 
     fb = _feedback(node)
-    try:
-        share_count = int(_deep_get(fb, "share_count", "count") or 0)
-    except (TypeError, ValueError):
-        share_count = 0
     return {
         "post_id": post_id,
         "page_id": resolved_page_id,
@@ -206,7 +225,7 @@ def flatten(node: dict, page_id: str, page_name: str) -> dict:
         "created_unix": created_unix,
         "reaction_counts": _reaction_counts(fb),
         "comment_count": _comment_count(fb),
-        "share_count": share_count,
+        "share_count": _share_count(fb),
         "permalink_url": node.get("permalink_url") or "",
         "media": _media(node),
     }
