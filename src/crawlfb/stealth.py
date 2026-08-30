@@ -20,14 +20,19 @@ window.chrome = {runtime: {}};
 """
 
 
+def _load_storage_state(path: str | None) -> dict | None:
+    if not path:
+        return None
+    try:
+        raw = json.loads(open(path, encoding="utf-8").read())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
 @asynccontextmanager
 async def launch_context(cfg: Config) -> AsyncIterator[tuple[BrowserContext, Page]]:
-    storage_state = None
-    if cfg.storage_state:
-        try:
-            storage_state = json.loads(open(cfg.storage_state, encoding="utf-8").read())
-        except (FileNotFoundError, json.JSONDecodeError):
-            storage_state = None
+    storage_state = _load_storage_state(cfg.storage_state)
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=cfg.headless)
