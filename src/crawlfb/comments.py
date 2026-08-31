@@ -282,23 +282,52 @@ async def _click_view_more(page) -> int:
     ))
 
 
+async def scroll_comment_list(page) -> bool:
+    """Scroll every scrollable div to its bottom to trigger Facebook's
+    infinite-scroll comment pagination.
+
+    The logged-in permalink loads older comments by scrolling the comment-list
+    container — there is no 'view more comments' button in the current UI, and
+    scrolling the window does nothing (the comment list is its own scroll div).
+    Each scroll fires a GraphQL request the CommentInterceptor captures. Returns
+    True when at least one container actually moved.
+    """
+    return bool(await page.evaluate(
+        """() => {
+            let any = false;
+            document.querySelectorAll('div').forEach(d => {
+                if (d.scrollHeight > d.clientHeight + 100 && d.clientHeight > 100) {
+                    if (d.scrollTop < d.scrollHeight - d.clientHeight - 1) {
+                        d.scrollTop = d.scrollHeight;
+                        any = true;
+                    }
+                }
+            });
+            return any;
+        }"""
+    ))
+
+
 async def expand_comments(page, cfg, rounds: int = 4) -> int:
-    """Expand the inline comment sections of the visible feed posts by clicking
-    every 'view more comments' / 'view replies' button for a few rounds. Each
-    click fires a GraphQL request the CommentInterceptor captures (and buckets
-    by post). Returns the total number of buttons clicked.
+    """Expand the inline comment sections by scrolling the comment-list
+    container (older comments) and clicking every 'view replies' button (nested
+    replies) for a few rounds. Each action fires a GraphQL request the
+    CommentInterceptor captures (and buckets by post). Returns the total number
+    of buttons clicked.
 
     Uses a short per-click delay (independent of the scroll-level anti-bot
-    delay) so many 'view more' clicks can run in a bounded time — a 321-comment
-    post needs ~15 clicks, which must not each cost cfg.delay_base seconds."""
+    delay) so many rounds can run in a bounded time — a 200-comment post needs
+    ~15 scrolls, which must not each cost cfg.delay_base seconds."""
     human = Humanizer(base=min(cfg.delay_base, 0.8), jitter=0.35)
     total = 0
-    # Let the comment section hydrate before the first pass — the 'view more'
-    # button renders asynchronously after the post card, and clicking too early
-    # finds nothing.
+    # Let the comment section hydrate before the first pass — the reply buttons
+    # render asynchronously after the post card, and scrolling too early finds
+    # nothing.
     await asyncio.sleep(0.6)
     zero_streak = 0
     for _ in range(rounds):
+        await scroll_comment_list(page)
+        await asyncio.sleep(0.5)
         clicked = await _click_view_more(page)
         total += clicked
         if clicked == 0:
