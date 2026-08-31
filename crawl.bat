@@ -5,6 +5,9 @@ rem  Output: output\{id}.json per page
 rem ============================================================
 cd /d D:\capstone\brandhub\crawl-fb
 
+rem Rotate proxy first so this run uses a fresh IP
+python tools\rotate_proxy.py
+
 python -m crawlfb.cli --max-posts 10
 
 rem If headless is flagged, comment the line above and use:

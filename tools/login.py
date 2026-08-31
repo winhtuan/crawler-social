@@ -1,6 +1,6 @@
 """Open a visible browser, log into Facebook by hand, then save the session.
 
-Run:  FB_PROXY= python tools/login.py
+Run:  HTTP_PROXY= python tools/login.py
 
 The browser opens at facebook.com. Log in (password + 2FA as usual). When the
 home feed shows your account, press Enter here. The script then writes the
@@ -27,7 +27,7 @@ async def _login() -> None:
         max_posts=1,
         headless=False,          # visible browser so you can log in
         humanize=False,          # no auto mouse/scroll while you type
-        proxy=Proxy.from_url(os.getenv("FB_PROXY")),
+        proxy=Proxy.from_url(os.getenv("HTTP_PROXY")),
         storage_state=storage,
     )
     async with launch_context(cfg) as (_ctx, page):

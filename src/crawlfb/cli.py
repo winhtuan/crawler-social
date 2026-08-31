@@ -199,7 +199,7 @@ def main() -> None:
             max_comments=args.max_comments,
             headless=args.headless,
             humanize=args.humanize,
-            proxy=Proxy.from_url(args.proxy or os.getenv("FB_PROXY")),
+            proxy=Proxy.from_url(args.proxy or os.getenv("HTTP_PROXY")),
             delay_base=args.delay_base,
             delay_jitter=args.delay_jitter,
             storage_state=args.storage_state or os.getenv("FB_STORAGE_STATE"),

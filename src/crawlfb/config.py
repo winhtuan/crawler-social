@@ -59,7 +59,7 @@ class Config:
             output=args.output,
             max_posts=args.max_posts,
             headless=args.headless,
-            proxy=Proxy.from_url(args.proxy or os.getenv("FB_PROXY")),
+            proxy=Proxy.from_url(args.proxy or os.getenv("HTTP_PROXY")),
             delay_base=args.delay_base,
             delay_jitter=args.delay_jitter,
             storage_state=storage,

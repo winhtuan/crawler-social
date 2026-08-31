@@ -7,3 +7,5 @@ output/*
 .venv/
 .superpowers/
 *.egg-info/
+
+todo.md
