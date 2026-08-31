@@ -101,6 +101,48 @@ def _comment_likes(node: dict) -> int:
     return _to_int(_deep_get(node, "feedback", "reactors", "count_reduced"))
 
 
+def _comment_media(node: dict) -> tuple[str, str]:
+    """(media_type, media_url) for a comment whose content is a sticker / image
+    / video instead of text. Returns ("", "") for a plain text comment.
+
+    Facebook renders media comments with `body: null` and an `attachments`
+    entry whose `style_list` plus the nested target/media __typename name the
+    kind. Confirmed shape (video comment):
+
+        attachments: [{"style_list": ["video_inline", "video", ...],
+                       "style_type_renderer": {"attachment": {
+                           "url": ".../videos/952536887906156/",
+                           "target": {"__typename": "Video", "id": "..."},
+                           "media":  {"__typename": "Video", ...}}}}]
+
+    Sticker comments may instead carry the sticker object directly on the node.
+    """
+    for att in node.get("attachments") or []:
+        if not isinstance(att, dict):
+            continue
+        style_list = [str(s).lower() for s in (att.get("style_list") or [])]
+        inner = (att.get("style_type_renderer") or {}).get("attachment") or {}
+        target = inner.get("target") or {}
+        media = inner.get("media") or {}
+        typename = str(target.get("__typename") or media.get("__typename") or "").lower()
+        url = inner.get("url") or ""
+        if not url and isinstance(media, dict):
+            url = media.get("playable_url") or media.get("uri") or ""
+        sig = " ".join(style_list) + " " + typename
+        if "sticker" in sig:
+            return "sticker", url
+        if "video" in sig:
+            return "video", url
+        if "gif" in sig or "animated" in sig:
+            return "gif", url
+        if "photo" in sig or "image" in sig:
+            return "image", url
+    sticker = node.get("sticker")
+    if isinstance(sticker, dict):
+        return "sticker", sticker.get("url") or sticker.get("uri") or ""
+    return "", ""
+
+
 def flatten_comment(node: dict, post_url: str) -> dict:
     """Map one raw Comment node to the flat comment record."""
     cid = _comment_id(node)
@@ -111,10 +153,13 @@ def flatten_comment(node: dict, post_url: str) -> dict:
         text = body
     else:
         text = ""
+    media_type, media_url = _comment_media(node)
     created = node.get("created_time")
     return {
         "comment_id": cid,
         "text": text,
+        "media_type": media_type,
+        "media_url": media_url,
         "author": _deep_get(node, "author", "name") or "",
         "likes": _comment_likes(node),
         "date": _iso(created) if created is not None else "",

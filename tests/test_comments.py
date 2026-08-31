@@ -56,6 +56,50 @@ def test_flatten_comment_body_string_and_depth():
     assert c["threading_depth"] == 1
 
 
+def test_flatten_comment_text_has_empty_media_marker():
+    c = flatten_comment(_node(), "https://x/")
+    assert c["media_type"] == ""
+    assert c["media_url"] == ""
+
+
+def test_flatten_comment_marks_video_attachment():
+    node = _node(body=None)
+    node["attachments"] = [{
+        "style_list": ["video_inline", "video"],
+        "style_type_renderer": {"attachment": {
+            "url": "https://www.facebook.com/bence.sarusikiss/videos/952536887906156/",
+            "target": {"__typename": "Video", "id": "952536887906156"},
+            "media": {"__typename": "Video"},
+        }},
+    }]
+    c = flatten_comment(node, "https://x/")
+    assert c["text"] == ""
+    assert c["media_type"] == "video"
+    assert c["media_url"] == "https://www.facebook.com/bence.sarusikiss/videos/952536887906156/"
+
+
+def test_flatten_comment_marks_image_attachment():
+    node = _node(body=None)
+    node["attachments"] = [{
+        "style_list": ["photo"],
+        "style_type_renderer": {"attachment": {
+            "target": {"__typename": "Photo"},
+            "media": {"__typename": "Photo", "uri": "https://scontent/img.jpg"},
+        }},
+    }]
+    c = flatten_comment(node, "https://x/")
+    assert c["media_type"] == "image"
+    assert c["media_url"] == "https://scontent/img.jpg"
+
+
+def test_flatten_comment_marks_sticker_field():
+    node = _node(body=None)
+    node["sticker"] = {"url": "https://scontent/sticker.png"}
+    c = flatten_comment(node, "https://x/")
+    assert c["media_type"] == "sticker"
+    assert c["media_url"] == "https://scontent/sticker.png"
+
+
 def test_flatten_comment_likes_falls_back_to_count_reduced():
     node = _node(comment_action_links=[])
     node["feedback"] = {"reactors": {"count_reduced": "634"}}

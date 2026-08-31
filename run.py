@@ -1,7 +1,9 @@
 """Orchestrate one crawl run: rotate proxy -> crawl -> upload (even on Ctrl+C).
 
-The upload runs in a finally block, so partial output files still go to S3 when
-the crawl is interrupted mid-way. Replaces the 3-command chain in crawl.bat.
+The crawl itself (crawlfb.cli) now also fetches the ~3 most recent posts from
+an external API (scrapecreators -> apify) and crawls their comments. The S3
+upload always runs, so partial output files still land on S3 when the crawl is
+interrupted mid-way. Replaces the 3-command chain in crawl.bat.
 
 Run:  python run.py --max-posts 10
 """

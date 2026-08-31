@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "crawl-fb · Facebook Page Crawl Pipeline",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "pipeline", "label": "Pipeline (run.py → crawlfb.cli)" },
+    { "id": "external", "label": "External + storage" }
+  ],
+  "mainPath": ["entry", "launch", "feed", "comments", "recent", "upload"],
+  "nodes": [
+    { "id": "entry", "lane": "pipeline", "col": 0, "type": "backend", "label": "run.py", "sublabel": "rotate proxy → chạy crawl", "width": 150 },
+    { "id": "launch", "lane": "pipeline", "col": 1, "type": "backend", "label": "Khởi tạo trình duyệt", "sublabel": "CloakBrowser + cookie", "width": 156 },
+    { "id": "feed", "lane": "pipeline", "col": 2, "type": "backend", "label": "Phase 1 · Cào feed", "sublabel": "cuộn → thu thập post", "width": 142 },
+    { "id": "comments", "lane": "pipeline", "col": 3, "type": "backend", "label": "Phase 2 · Cào comment", "sublabel": "permalink → mở rộng", "width": 164 },
+    { "id": "recent", "lane": "pipeline", "col": 4, "type": "backend", "label": "Phase 3 · Post gần nhất", "sublabel": "API bù post bỏ sót", "width": 176 },
+    { "id": "upload", "lane": "pipeline", "col": 5, "type": "cloud", "label": "upload_s3.py", "sublabel": "luôn chạy (finally)", "width": 120 },
+    { "id": "facebook", "lane": "external", "col": 2, "type": "external", "label": "Facebook", "sublabel": "GraphQL + SSR", "width": 130 },
+    { "id": "output", "lane": "external", "col": 3, "type": "database", "label": "output/{id}.json", "sublabel": "upsert theo post_id", "width": 130 },
+    { "id": "scrapecreators", "lane": "external", "col": 4, "type": "external", "label": "Scrape Creators", "sublabel": "retry 2× · 3 post/lần", "width": 130 },
+    { "id": "apify", "lane": "external", "col": 4, "type": "external", "label": "Apify", "sublabel": "facebook-posts-scraper", "width": 150, "yOffset": 64 }
+  ],
+  "edges": [
+    { "id": "e-entry-launch", "from": "entry", "to": "launch", "variant": "default" },
+    { "id": "e-launch-feed", "from": "launch", "to": "feed", "label": "Phase 1", "variant": "emphasis" },
+    { "id": "e-feed-comments", "from": "feed", "to": "comments", "label": "Phase 2", "variant": "default" },
+    { "id": "e-comments-recent", "from": "comments", "to": "recent", "label": "Phase 3", "variant": "default" },
+    { "id": "e-recent-upload", "from": "recent", "to": "upload", "variant": "emphasis" },
+    { "id": "e-feed-fb", "from": "feed", "to": "facebook", "label": "cuộn → /api/graphql/", "role": "async", "variant": "default" },
+    { "id": "e-comments-fb", "from": "comments", "to": "facebook", "label": "mở permalink → SSR", "role": "async", "variant": "default" },
+    { "id": "e-comments-output", "from": "comments", "to": "output", "label": "write_posts · upsert", "role": "branch", "variant": "dashed" },
+    { "id": "e-recent-scrape", "from": "recent", "to": "scrapecreators", "label": "lấy 3 post mới", "role": "branch", "variant": "default" },
+    { "id": "e-recent-apify", "from": "recent", "to": "apify", "label": "thất bại → fallback", "role": "error", "variant": "security" },
+    { "id": "e-recent-output", "from": "recent", "to": "output", "label": "dedupe theo post_id", "role": "branch", "variant": "dashed" }
+  ]
+}

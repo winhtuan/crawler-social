@@ -44,9 +44,9 @@ async def collect_posts(page, interceptor: FeedInterceptor, cfg: Config) -> list
     the window to the bottom (guaranteed to fire the next GraphQL batch) and
     adds a small human-like wheel scroll on top. Each pass then waits for the
     GraphQL batch to actually arrive before checking growth, so a slow batch
-    isn't mistaken for a dead feed. We stop early only when the count stops
-    growing across stall_limit consecutive passes (page ran out of posts), with
-    a hard cap so a wedged page can't hang forever.
+    isn't mistaken for a dead feed. We stop early when the count stops growing
+    across stall_limit consecutive passes (page ran out of posts), with a hard
+    cap so a wedged page can't hang forever.
 
     Reels are counted out and dropped — their permalink is /reel/ and their
     comments live in a drawer the comment pass can't read (see

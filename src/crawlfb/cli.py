@@ -16,6 +16,8 @@ from crawlfb.comments import (
 )
 from crawlfb.normalize import normalize_post
 from crawlfb.writer import write_posts
+from crawlfb.models import Comment
+from crawlfb.recent import existing_post_ids, fetch_recent
 
 
 def _page_id(url: str) -> str:
@@ -170,6 +172,22 @@ async def run(cfg: Config) -> None:
             # authoritative total. The raw count is still written to each post's
             # "comments" field in the output JSON.
             print(f"  [{i}/{collected}] {post_id}: {len(comments)} comments")
+
+        # Phase 3 — fetch the ~3 newest posts from an external API
+        # (scrapecreators -> apify) and merge only the ones the feed missed.
+        # New posts get the same comment crawl as a feed post; duplicates are
+        # skipped (the crawl's copy is richer than the API's).
+        recent_posts = await asyncio.to_thread(fetch_recent, cfg.page_url)
+        if recent_posts:
+            seen = existing_post_ids(Path(cfg.output))
+            new_posts = [p for p in recent_posts if p.post_id and p.post_id not in seen]
+            for j, post in enumerate(new_posts, 1):
+                comments = await _scrape_post_comments(
+                    page, comment_interceptor,
+                    post.facebook_url or "", post.post_id or "", cfg)
+                post.comments_list = [Comment(**c) for c in comments]
+                added += write_posts([post], Path(cfg.output))
+                print(f"  [recent {j}/{len(new_posts)}] {post.post_id}: {len(comments)} comments")
 
     print(f"collected {collected}, wrote {added} new -> {cfg.output}")
 

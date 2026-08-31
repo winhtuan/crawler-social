@@ -22,6 +22,8 @@ class Comment(BaseModel):
     model_config = ConfigDict(extra="allow")
     comment_id: str = ""
     text: str = ""
+    media_type: str = ""  # "" text | "sticker" | "image" | "video" | "gif"
+    media_url: str = ""
     author: str = ""
     likes: int = 0
     date: str = ""

@@ -62,5 +62,6 @@ def test_comment_model_shape():
     )
     d = c.model_dump()
     assert set(d.keys()) == {
-        "comment_id", "text", "author", "likes", "date", "threading_depth", "comment_url",
+        "comment_id", "text", "media_type", "media_url", "author", "likes",
+        "date", "threading_depth", "comment_url",
     }
