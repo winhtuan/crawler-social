@@ -1,3 +1,5 @@
+import base64
+
 from crawlfb.comments import (
     flatten_comment,
     extract_comments,
@@ -130,3 +132,25 @@ def test_collect_comments_no_cap_when_max_nonpositive():
         inter.add_nodes([_node(legacy_fbid=str(i), body={"text": f"c{i}"})])
     got = collect_comments(inter, "https://x/", "1122365663449579", max_comments=0)
     assert len(got) == 5
+
+
+def test_add_nodes_buckets_ssr_html_comment_by_relay_id():
+    # Permalink SSR comments (data-sjs) carry a base64 Relay id alongside
+    # legacy_fbid; add_nodes must decode the post id and bucket the comment so
+    # comments_for_post(post_id) returns it — the path Phase 2 relies on.
+    relay = base64.b64encode(
+        b"comment:1122365663449579_1781129452904905"
+    ).decode("ascii")
+    node = {
+        "__typename": "Comment",
+        "legacy_fbid": "1781129452904905",
+        "id": relay,
+        "body": {"text": "ssr comment"},
+        "author": {"name": "A"},
+        "created_time": 1,
+        "depth": 0,
+    }
+    inter = CommentInterceptor(None)
+    inter.add_nodes([node])
+    got = inter.comments_for_post("1122365663449579")
+    assert got["1781129452904905"]["text"] == "ssr comment"

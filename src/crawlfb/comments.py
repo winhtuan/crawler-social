@@ -314,6 +314,41 @@ async def expand_comments(page, cfg, rounds: int = 4) -> int:
     return total
 
 
+async def _click_exact_text(page, text: str) -> bool:
+    """Click the first clickable element whose normalized text equals `text`
+    exactly. Exact match avoids grabbing a container whose textContent merely
+    contains the label alongside a description."""
+    return bool(await page.evaluate(
+        """(t) => {
+            const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+            const sel = [...document.querySelectorAll(
+                '[role="button"], a, [role="menuitem"], [role="option"], [role="radio"], span[dir="auto"]')];
+            for (const e of sel) {
+                if (norm(e.textContent) === t) { e.click(); return true; }
+            }
+            return false;
+        }""",
+        text,
+    ))
+
+
+async def switch_to_all_comments(page) -> bool:
+    """Switch the permalink's comment sort to 'All comments' so spam-filtered
+    comments load too. The permalink defaults to 'Most relevant', which hides
+    low-relevance comments. No-op (False) when the sort control is absent or
+    already set."""
+    opened = False
+    for trigger in ("Phù hợp nhất", "Mới nhất", "Most relevant", "Newest"):
+        if await _click_exact_text(page, trigger):
+            opened = True
+            await asyncio.sleep(0.8)
+            break
+    if not opened:
+        return False
+    return (await _click_exact_text(page, "Tất cả bình luận")
+            or await _click_exact_text(page, "All comments"))
+
+
 async def expand_feed_topdown(page, cfg, steps: int = 16, rounds: int = 8) -> int:
     """Expand comment sections top-to-bottom over the already-collected feed.
     Feed virtualization drops a post's inline 'view more' button once it scrolls

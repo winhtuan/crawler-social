@@ -10,7 +10,10 @@ from crawlfb.config import Config, Proxy
 from crawlfb.stealth import launch_context
 from crawlfb.intercept import FeedInterceptor
 from crawlfb.paginate import collect_posts
-from crawlfb.comments import CommentInterceptor, collect_comments, expand_comments
+from crawlfb.comments import (
+    CommentInterceptor, collect_comments, expand_comments,
+    extract_comments_from_html, switch_to_all_comments,
+)
 from crawlfb.normalize import normalize_post
 from crawlfb.writer import write_posts
 
@@ -83,20 +86,23 @@ async def _trigger_feed(page) -> None:
 
 async def _expand_post_comments(page, interceptor, post_id: str, cfg: Config) -> None:
     """Expand one post's comment section until it reaches cfg.max_comments
-    (when a cap is set) or the 'view more' buttons run dry. Stops early at the
-    cap so a large post isn't fully expanded just to be sliced afterward."""
+    (when a cap is set) or the comment count stops growing. Stale 'view reply'
+    buttons keep matching after their reply is loaded, so stop on a count
+    plateau rather than on a click-count plateau."""
     target = cfg.max_comments if cfg.max_comments > 0 else 10**18
-    zero_streak = 0
+    stale_streak = 0
     for _ in range(30):
-        if len(interceptor.comments_for_post(post_id)) >= target:
+        before = len(interceptor.comments_for_post(post_id))
+        if before >= target:
             return
-        clicked = await expand_comments(page, cfg, rounds=1)
-        if clicked == 0:
-            zero_streak += 1
-            if zero_streak >= 2:
+        await expand_comments(page, cfg, rounds=1)
+        after = len(interceptor.comments_for_post(post_id))
+        if after == before:
+            stale_streak += 1
+            if stale_streak >= 3:
                 return
         else:
-            zero_streak = 0
+            stale_streak = 0
 
 
 async def _scrape_post_comments(page, interceptor, post_url: str, post_id: str,
@@ -114,6 +120,14 @@ async def _scrape_post_comments(page, interceptor, post_url: str, post_id: str,
                 print(f"    skip {post_url} (failed to load)")
                 return []
             await asyncio.sleep(2 * (attempt + 1))
+    # A permalink serves its comments in SSR HTML (data-sjs JSON), not in the
+    # /api/graphql/ responses — those only carry total_count. Pull them from the
+    # page markup; each comment's Relay id buckets it back to this post.
+    interceptor.add_nodes(extract_comments_from_html(await page.content()))
+    # The permalink defaults to 'Most relevant', hiding low-relevance comments.
+    # Switch to 'All comments' before expanding so they load too.
+    await switch_to_all_comments(page)
+    await asyncio.sleep(1.0)
     await _expand_post_comments(page, interceptor, post_id, cfg)
     return collect_comments(interceptor, post_url, post_id, cfg.max_comments)
 
@@ -148,8 +162,12 @@ async def run(cfg: Config) -> None:
                 page, comment_interceptor, post_url, post_id, cfg)
             result = normalize_post(raw, page_name, comments)
             added += write_posts([result], Path(cfg.output))
-            expected = raw.get("comment_count") or 0
-            print(f"  [{i}/{collected}] {post_id}: {len(comments)}/{expected} comments")
+            # Log only the scraped count. The feed's comment_count (total_count)
+            # is unreliable — it undercounts replies and overcounts deleted/spam/
+            # blocked-user comments — so printing N/M falsely implies M is the
+            # authoritative total. The raw count is still written to each post's
+            # "comments" field in the output JSON.
+            print(f"  [{i}/{collected}] {post_id}: {len(comments)} comments")
 
     print(f"collected {collected}, wrote {added} new -> {cfg.output}")
 
