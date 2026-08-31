@@ -1,8 +1,8 @@
 from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
-from playwright.async_api import async_playwright, BrowserContext, Page
+from typing import Any, AsyncIterator
+from cloakbrowser import launch_context_async
 from crawlfb.config import Config
 
 # UA Chrome-on-Windows ổn định gần đây. Giữ là hằng module để test.
@@ -10,14 +10,6 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
-
-# Chạy trước mọi script của trang; ẩn các dấu hiệu automation mà FB fingerprint.
-STEALTH_JS = """
-Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-Object.defineProperty(navigator, 'languages', {get: () => ['vi-VN', 'vi', 'en-US', 'en']});
-Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-window.chrome = {runtime: {}};
-"""
 
 
 _SAMESITE_MAP = {
@@ -68,31 +60,45 @@ def _load_storage_state(path: str | None) -> dict | None:
     return None
 
 
+def build_cloak_kwargs(cfg: Config, storage_state: dict | None) -> dict:
+    """Map crawl-fb Config -> kwargs for CloakBrowser launch_context_async.
+
+    CloakBrowser is a drop-in Playwright replacement with fingerprint patches
+    at the Chromium C++ source level (no JS-injection stealth), plus an
+    optional ``humanize`` layer that drives mouse/scroll like a real user.
+    Keeping the launch params in one pure function leaves ``launch_context``
+    thin and lets tests cover the mapping without launching a browser.
+    """
+    kwargs: dict = {
+        "headless": cfg.headless,
+        "proxy": cfg.proxy.to_playwright() if cfg.proxy else None,
+        "user_agent": USER_AGENT,
+        "viewport": {"width": 1366, "height": 768},
+        "locale": "vi-VN",
+        "timezone": "Asia/Ho_Chi_Minh",
+        "humanize": cfg.humanize,
+    }
+    if storage_state is not None:
+        kwargs["storage_state"] = storage_state
+    return kwargs
+
+
 @asynccontextmanager
-async def launch_context(cfg: Config) -> AsyncIterator[tuple[BrowserContext, Page]]:
+async def launch_context(cfg: Config) -> AsyncIterator[tuple[Any, Any]]:
     storage_state = _load_storage_state(cfg.storage_state)
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=cfg.headless)
-        context = await browser.new_context(
-            viewport={"width": 1366, "height": 768},
-            user_agent=USER_AGENT,
-            locale="vi-VN",
-            timezone_id="Asia/Ho_Chi_Minh",
-            proxy=cfg.proxy.to_playwright() if cfg.proxy else None,
-            storage_state=storage_state,
-        )
-        await context.add_init_script(STEALTH_JS)
-        page = await context.new_page()
-        try:
-            yield context, page
-        finally:
-            if cfg.storage_state and storage_state is not None:
-                try:
-                    state = await context.storage_state()
-                    with open(cfg.storage_state, "w", encoding="utf-8") as f:
-                        json.dump(state, f)
-                except (OSError, IOError):
-                    pass
-            await context.close()
-            await browser.close()
+    # CloakBrowser patches context.close() to also tear down the browser and
+    # its Playwright instance, so there is no separate browser.close() call.
+    context = await launch_context_async(**build_cloak_kwargs(cfg, storage_state))
+    page = await context.new_page()
+    try:
+        yield context, page
+    finally:
+        if cfg.storage_state and storage_state is not None:
+            try:
+                state = await context.storage_state()
+                with open(cfg.storage_state, "w", encoding="utf-8") as f:
+                    json.dump(state, f)
+            except (OSError, IOError):
+                pass
+        await context.close()

@@ -64,6 +64,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--headless", action="store_true", default=True)
     p.add_argument("--headed", dest="headless", action="store_false",
                    help="run a visible browser (debug/anti-bot fallback)")
+    p.add_argument("--no-humanize", dest="humanize", action="store_false", default=True,
+                   help="disable human-like input (faster, less stealthy)")
     p.add_argument("--proxy", default=None, help="http://user:pass@host:port")
     p.add_argument("--delay-base", type=float, default=3.0)
     p.add_argument("--delay-jitter", type=float, default=2.0)
@@ -113,7 +115,7 @@ async def _scrape_post_comments(page, interceptor, post_url: str, post_id: str,
         return []
     for attempt in range(3):
         try:
-            await page.goto(post_url, wait_until="networkidle", timeout=60000)
+            await page.goto(post_url, wait_until="domcontentloaded", timeout=60000)
             break
         except Exception:
             if attempt == 2:
@@ -144,7 +146,7 @@ async def run(cfg: Config) -> None:
         interceptor = FeedInterceptor(page, page_name=page_name)
         interceptor.attach()
         posts_url = cfg.normalized_page_url() + "posts/"
-        await page.goto(posts_url, wait_until="networkidle", timeout=60000)
+        await page.goto(posts_url, wait_until="domcontentloaded", timeout=60000)
         await _trigger_feed(page)
         raw_posts = await collect_posts(page, interceptor, cfg)
         collected = len(raw_posts)
@@ -196,6 +198,7 @@ def main() -> None:
             max_posts=args.max_posts,
             max_comments=args.max_comments,
             headless=args.headless,
+            humanize=args.humanize,
             proxy=Proxy.from_url(args.proxy or os.getenv("FB_PROXY")),
             delay_base=args.delay_base,
             delay_jitter=args.delay_jitter,

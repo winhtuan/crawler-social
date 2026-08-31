@@ -39,6 +39,7 @@ class Config:
     max_posts: int = 50
     max_comments: int = 0  # 0 = no cap (scrape all)
     headless: bool = True
+    humanize: bool = True
     proxy: Proxy | None = None
     delay_base: float = 3.0
     delay_jitter: float = 2.0

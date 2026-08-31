@@ -1,14 +1,10 @@
 import json
-from crawlfb.stealth import USER_AGENT, STEALTH_JS, _load_storage_state, _convert_cookie_editor
-from crawlfb.config import Proxy
+from crawlfb.stealth import USER_AGENT, _load_storage_state, _convert_cookie_editor, build_cloak_kwargs
+from crawlfb.config import Config, Proxy
 
 def test_ua_is_chrome_windows():
     assert "Chrome" in USER_AGENT
     assert "Windows NT" in USER_AGENT
-
-def test_stealth_js_patches_webdriver():
-    assert "navigator" in STEALTH_JS
-    assert "webdriver" in STEALTH_JS
 
 def test_proxy_to_playwright_dict():
     p = Proxy(server="http://1.2.3.4:8080", username="u", password="p")
@@ -52,3 +48,31 @@ def test_convert_cookie_editor_maps_samesite_and_session():
     assert out[1]["sameSite"] == "Strict" and out[1]["expires"] == -1
     assert out[2]["sameSite"] == "Lax"
     assert len(out) == 3
+
+
+def test_build_cloak_kwargs_maps_config_defaults():
+    cfg = Config(page_url="https://www.facebook.com/x", output="out.json")
+    kw = build_cloak_kwargs(cfg, None)
+    assert kw["headless"] is True
+    assert kw["proxy"] is None
+    assert kw["user_agent"] == USER_AGENT
+    assert kw["viewport"] == {"width": 1366, "height": 768}
+    assert kw["locale"] == "vi-VN"
+    assert kw["timezone"] == "Asia/Ho_Chi_Minh"
+    assert kw["humanize"] is True
+    assert "storage_state" not in kw
+
+
+def test_build_cloak_kwargs_proxy_storage_and_overrides():
+    cfg = Config(
+        page_url="https://www.facebook.com/x",
+        output="out.json",
+        headless=False,
+        humanize=False,
+        proxy=Proxy(server="http://1.2.3.4:8080", username="u", password="p"),
+    )
+    kw = build_cloak_kwargs(cfg, {"cookies": []})
+    assert kw["proxy"] == {"server": "http://1.2.3.4:8080", "username": "u", "password": "p"}
+    assert kw["headless"] is False
+    assert kw["humanize"] is False
+    assert kw["storage_state"] == {"cookies": []}
