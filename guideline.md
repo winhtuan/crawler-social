@@ -16,7 +16,11 @@ Lần đầu CloakBrowser tự tải binary (vài chục giây). Bản free ch�
 copy .env.example .env
 ```
 
-Điền `HTTP_PROXY` (`http://user:pass@host:port`, để trống = IP nhà). Các key khác để mặc định.
+Điền:
+- `PROXY_KEY_VALUE` — key KiotProxy để tự đổi proxy.
+- `S3_BUCKET_NAME` + `AWS_*` — để upload kết quả lên S3.
+
+`HTTP_PROXY` để trống cũng được, script tự điền mỗi lần chạy.
 
 ## 3. Lấy session đăng nhập (bắt buộc)
 
@@ -52,9 +56,13 @@ Sửa `data/fb_pages.json`:
 ## 5. Chạy
 
 ```bash
-python -m crawlfb.cli --max-posts 10
+python run.py --max-posts 10
 ```
+
+Flow: đổi proxy → cào → upload S3. Ctrl+C giữa chừng vẫn upload phần đã cào.
 
 ## 6. Kết quả
 
 `output/{id}_{run_id}.json` — mỗi post có `text`, `author`, `reactions`, `comments`, `comments_list`.
+
+Upload lên S3: `s3://{bucket}/{dd-MM-yyyy}/{id}/{id}_{run_id}.json`.
