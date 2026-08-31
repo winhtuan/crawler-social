@@ -205,7 +205,11 @@ def main() -> None:
             storage_state=args.storage_state or os.getenv("FB_STORAGE_STATE"),
         )
         print(f"\n== crawling {url} -> {cfg.output}")
-        asyncio.run(run(cfg))
+        try:
+            asyncio.run(run(cfg))
+        except KeyboardInterrupt:
+            print(f"interrupted — partial output saved to {cfg.output}")
+            break
 
 
 if __name__ == "__main__":

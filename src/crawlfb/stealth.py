@@ -99,6 +99,10 @@ async def launch_context(cfg: Config) -> AsyncIterator[tuple[Any, Any]]:
                 state = await context.storage_state()
                 with open(cfg.storage_state, "w", encoding="utf-8") as f:
                     json.dump(state, f)
-            except (OSError, IOError):
+            except Exception:
+                # browser may already be closed on Ctrl+C — best-effort save
                 pass
-        await context.close()
+        try:
+            await context.close()
+        except Exception:
+            pass
