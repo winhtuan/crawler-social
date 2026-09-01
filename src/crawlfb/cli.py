@@ -12,7 +12,7 @@ from crawlfb.intercept import FeedInterceptor
 from crawlfb.paginate import collect_posts
 from crawlfb.comments import (
     CommentInterceptor, collect_comments, expand_comments,
-    extract_comments_from_html, switch_to_all_comments,
+    extract_comments_from_html, switch_to_all_comments, _reel_to_watch,
 )
 from crawlfb.normalize import normalize_post
 from crawlfb.writer import write_posts
@@ -115,9 +115,13 @@ async def _scrape_post_comments(page, interceptor, post_url: str, post_id: str,
     twice before skipping — a deleted or private post must not sink the run."""
     if not post_url:
         return []
+    # A reel permalink (/reel/<id>/) serves no comments; open the watch URL so
+    # the comment section renders. comment_urls below still point at the
+    # canonical post_url.
+    scrape_url = _reel_to_watch(post_url)
     for attempt in range(3):
         try:
-            await page.goto(post_url, wait_until="domcontentloaded", timeout=60000)
+            await page.goto(scrape_url, wait_until="domcontentloaded", timeout=60000)
             break
         except Exception:
             if attempt == 2:

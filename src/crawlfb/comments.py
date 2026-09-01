@@ -226,6 +226,20 @@ def _permalink_key(url: str) -> str:
     return url.rstrip("/").rsplit("/", 1)[-1]
 
 
+def _reel_to_watch(url: str) -> str:
+    """Rewrite a /reel/<id>/ permalink to /watch/?v=<id>.
+
+    Facebook serves the /reel/<id>/ URL as a fullscreen player with NO
+    server-rendered comments and no comment GraphQL responses, so the comment
+    pass on a reel permalink finds nothing. The watch URL (which redirects to the
+    page's /videos/<id>/) serves comments in SSR HTML and paginates on scroll —
+    the same path photo-post permalinks take. Non-reel URLs pass through."""
+    m = re.search(r"/reel/(\d+)", url)
+    if m:
+        return f"https://www.facebook.com/watch/?v={m.group(1)}"
+    return url
+
+
 def _comment_permalink(node: dict) -> str:
     """The post permalink a comment belongs to, from its feedback.url (with the
     ?comment_id= suffix stripped). Empty when absent."""
@@ -444,15 +458,16 @@ async def expand_feed_topdown(page, cfg, steps: int = 16, rounds: int = 8) -> in
 def collect_comments(interceptor: CommentInterceptor, post_url: str,
                      post_id: str, max_comments: int) -> list[dict]:
     """Return the comments bucketed to post_id by a populated CommentInterceptor
-    (fed by expand_comments during feed collection). Sorted by date ascending,
-    capped at max_comments (<=0 means no cap). Each comment_url is rewritten to
-    point at this post's permalink."""
+    (fed by expand_comments during feed collection). Sorted by likes descending
+    (most-liked first; ties by date descending), capped at max_comments (<=0
+    means no cap) — so a >max_comments post keeps its top comments. Each
+    comment_url is rewritten to point at this post's permalink."""
     out: list[dict] = []
     for c in interceptor.comments_for_post(post_id).values():
         c = dict(c)
         if post_url:
             c["comment_url"] = f"{post_url}?comment_id={c['comment_id']}"
         out.append(c)
-    out.sort(key=lambda c: c.get("date") or "")
+    out.sort(key=lambda c: (c.get("likes") or 0, c.get("date") or ""), reverse=True)
     limit = max_comments if max_comments > 0 else 10**9
     return out[:limit]

@@ -9,6 +9,7 @@ from crawlfb.comments import (
     _comment_post_id,
     _permalink_key,
     _comment_permalink,
+    _reel_to_watch,
     CommentInterceptor,
     collect_comments,
 )
@@ -162,6 +163,18 @@ def test_comment_permalink_strips_comment_id():
     assert _comment_permalink(node) == "https://www.facebook.com/x/posts/pfbid02abc/"
 
 
+def test_reel_to_watch_rewrites_reel_url():
+    assert _reel_to_watch("https://www.facebook.com/reel/910068878409278/") == \
+        "https://www.facebook.com/watch/?v=910068878409278"
+
+
+def test_reel_to_watch_leaves_non_reel_untouched():
+    assert _reel_to_watch("https://www.facebook.com/x/posts/pfbid02abc/") == \
+        "https://www.facebook.com/x/posts/pfbid02abc/"
+    assert _reel_to_watch("https://www.facebook.com/x/videos/910068878409278/") == \
+        "https://www.facebook.com/x/videos/910068878409278/"
+
+
 def test_collect_comments_caps_at_max():
     inter = CommentInterceptor(None)
     for i in range(5):
@@ -176,6 +189,18 @@ def test_collect_comments_no_cap_when_max_nonpositive():
         inter.add_nodes([_node(legacy_fbid=str(i), body={"text": f"c{i}"})])
     got = collect_comments(inter, "https://x/", "1122365663449579", max_comments=0)
     assert len(got) == 5
+
+
+def test_collect_comments_sorts_most_liked_first():
+    inter = CommentInterceptor(None)
+    inter.add_nodes([_node(legacy_fbid="1", body={"text": "low"},
+                           comment_action_links=[{"comment": {"feedback": {"reactors": {"count": 2}}}}])])
+    inter.add_nodes([_node(legacy_fbid="2", body={"text": "high"},
+                           comment_action_links=[{"comment": {"feedback": {"reactors": {"count": 99}}}}])])
+    inter.add_nodes([_node(legacy_fbid="3", body={"text": "mid"},
+                           comment_action_links=[{"comment": {"feedback": {"reactors": {"count": 5}}}}])])
+    got = collect_comments(inter, "https://x/", "1122365663449579", max_comments=0)
+    assert [c["comment_id"] for c in got] == ["2", "3", "1"]
 
 
 def test_add_nodes_buckets_ssr_html_comment_by_relay_id():
