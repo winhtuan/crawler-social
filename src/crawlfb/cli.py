@@ -3,8 +3,11 @@ import argparse
 import asyncio
 import json
 import os
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 from dotenv import load_dotenv
 from crawlfb.config import Config, Proxy
 from crawlfb.stealth import launch_context
@@ -75,6 +78,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--storage-state", default=None)
     p.add_argument("--res-interval", type=float, default=15.0,
                    help="seconds between CPU/RAM log lines (0 disables)")
+    p.add_argument("--proxy-rotate-minutes", type=float, default=22.0,
+                   help="rotate proxy after this many minutes mid-run (0 disables)")
     return p.parse_args()
 
 
@@ -161,6 +166,30 @@ async def _log_resources(monitor: ResourceMonitor, interval: float) -> None:
         print(f"  [res] {monitor.line()}")
 
 
+def _rotate_proxy_script() -> Path:
+    """Absolute path to tools/rotate_proxy.py — three levels up from
+    src/crawlfb/cli.py (src/crawlfb -> src -> repo root)."""
+    return Path(__file__).resolve().parent.parent.parent / "tools" / "rotate_proxy.py"
+
+
+def _run_rotate_proxy() -> None:
+    """Rotate the KiotProxy by running tools/rotate_proxy.py, which writes the
+    fresh HTTP_PROXY into .env. Only affects the next crawl — the running
+    browser keeps the proxy it launched with."""
+    subprocess.run([sys.executable, str(_rotate_proxy_script())], check=False)
+
+
+async def _rotate_proxy_after(minutes: float, runner: Callable[[], None]) -> None:
+    """One-shot proxy rotation: sleep `minutes`, then invoke `runner` once.
+
+    No-op when `minutes <= 0`. The runner is the blocking KiotProxy subprocess,
+    offloaded to a thread so it doesn't stall the crawl's event loop."""
+    if minutes <= 0:
+        return
+    await asyncio.sleep(minutes * 60)
+    await asyncio.to_thread(runner)
+
+
 async def run(cfg: Config) -> None:
     added = 0
     collected = 0
@@ -171,6 +200,11 @@ async def run(cfg: Config) -> None:
     log_task = (
         asyncio.create_task(_log_resources(monitor, cfg.res_interval))
         if cfg.res_interval > 0
+        else None
+    )
+    rotate_task = (
+        asyncio.create_task(_rotate_proxy_after(cfg.proxy_rotate_minutes, _run_rotate_proxy))
+        if cfg.proxy_rotate_minutes > 0
         else None
     )
     try:
@@ -249,6 +283,12 @@ async def run(cfg: Config) -> None:
                 await log_task
             except asyncio.CancelledError:
                 pass
+        if rotate_task is not None:
+            rotate_task.cancel()
+            try:
+                await rotate_task
+            except asyncio.CancelledError:
+                pass
 
     print(f"collected {collected}, wrote {added} new -> {cfg.output}")
     print(f"  [res] final {monitor.line()}")
@@ -284,6 +324,7 @@ def main() -> None:
             delay_jitter=args.delay_jitter,
             storage_state=args.storage_state or os.getenv("FB_STORAGE_STATE"),
             res_interval=args.res_interval,
+            proxy_rotate_minutes=args.proxy_rotate_minutes,
         )
         print(f"\n== crawling {url} -> {cfg.output}")
         try:

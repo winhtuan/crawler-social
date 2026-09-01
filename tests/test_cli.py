@@ -77,3 +77,24 @@ def test_scrape_post_comments_survives_evaluate_crash():
     comments = asyncio.run(_scrape_post_comments(
         page, interceptor, "https://www.facebook.com/p/posts/1", "1", _cfg()))
     assert comments == []
+
+
+from crawlfb.cli import _rotate_proxy_after, _rotate_proxy_script
+
+
+def test_rotate_proxy_after_zero_is_noop():
+    calls = []
+    asyncio.run(_rotate_proxy_after(0.0, lambda: calls.append(1)))
+    assert calls == []
+
+
+def test_rotate_proxy_after_fires_runner_once():
+    calls = []
+    asyncio.run(_rotate_proxy_after(0.001, lambda: calls.append(1)))
+    assert calls == [1]
+
+
+def test_rotate_proxy_script_path_is_repo_tools():
+    p = _rotate_proxy_script()
+    assert p.name == "rotate_proxy.py"
+    assert p.exists()
