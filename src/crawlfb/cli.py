@@ -186,6 +186,9 @@ async def run(cfg: Config) -> None:
             await page.goto(posts_url, wait_until="domcontentloaded", timeout=60000)
             await _trigger_feed(page)
             raw_posts = await collect_posts(page, interceptor, cfg)
+            # The feed interceptor has no role after Phase 1 — detach it so it
+            # stops appending Story nodes during Phase 2/3 comment navigation.
+            interceptor.detach()
             collected = len(raw_posts)
             print(f"  collected {collected} posts")
 
@@ -233,10 +236,13 @@ async def run(cfg: Config) -> None:
         # comments live in a drawer (docs/adr/0002-exclude-reels.md).
         if interceptor is not None and page_name is not None:
             try:
-                raw = [p for p in interceptor.posts if not is_reel(p)]
+                # Cap like Phase 1 did: the final GraphQL batch can overshoot
+                # max_posts, and those overflow posts never entered Phase 2, so
+                # without the cap they'd flush as bogus empty-comment records.
+                raw = [p for p in interceptor.posts if not is_reel(p)][:cfg.max_posts]
                 checkpoint_posts(raw, page_name, Path(cfg.output), written_ids)
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"    warn: checkpoint flush failed ({exc})")
         if log_task is not None:
             log_task.cancel()
             try:

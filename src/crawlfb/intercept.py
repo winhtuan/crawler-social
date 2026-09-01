@@ -277,6 +277,12 @@ class FeedInterceptor:
     def attach(self) -> None:
         self._page.on("response", self._on_response)
 
+    def detach(self) -> None:
+        try:
+            self._page.remove_listener("response", self._on_response)
+        except Exception:
+            pass
+
     async def _on_response(self, resp) -> None:
         if "/api/graphql/" not in resp.url or resp.status != 200:
             return
