@@ -17,6 +17,7 @@ from crawlfb.comments import (
 from crawlfb.normalize import normalize_post
 from crawlfb.writer import write_posts
 from crawlfb.models import Comment
+from crawlfb.monitor import ResourceMonitor
 from crawlfb.recent import existing_post_ids, fetch_recent
 
 
@@ -72,6 +73,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--delay-base", type=float, default=3.0)
     p.add_argument("--delay-jitter", type=float, default=2.0)
     p.add_argument("--storage-state", default=None)
+    p.add_argument("--res-interval", type=float, default=15.0,
+                   help="seconds between CPU/RAM log lines (0 disables)")
     return p.parse_args()
 
 
@@ -140,60 +143,82 @@ async def _scrape_post_comments(page, interceptor, post_url: str, post_id: str,
     return collect_comments(interceptor, post_url, post_id, cfg.max_comments)
 
 
+async def _log_resources(monitor: ResourceMonitor, interval: float) -> None:
+    """Log CPU/RAM every `interval` seconds until cancelled."""
+    while True:
+        await asyncio.sleep(interval)
+        print(f"  [res] {monitor.line()}")
+
+
 async def run(cfg: Config) -> None:
     added = 0
     collected = 0
-    async with launch_context(cfg) as (_ctx, page):
-        page_name = _page_id(cfg.page_url)
+    monitor = ResourceMonitor()
+    log_task = (
+        asyncio.create_task(_log_resources(monitor, cfg.res_interval))
+        if cfg.res_interval > 0
+        else None
+    )
+    try:
+        async with launch_context(cfg) as (_ctx, page):
+            page_name = _page_id(cfg.page_url)
 
-        # Phase 1 — posts only. No comment interceptor and no inline expansion:
-        # comment clicks during the scroll starved post collection and tripped
-        # Facebook's anti-bot (see docs/adr/0001-two-pass-crawl.md).
-        interceptor = FeedInterceptor(page, page_name=page_name)
-        interceptor.attach()
-        posts_url = cfg.normalized_page_url() + "posts/"
-        await page.goto(posts_url, wait_until="domcontentloaded", timeout=60000)
-        await _trigger_feed(page)
-        raw_posts = await collect_posts(page, interceptor, cfg)
-        collected = len(raw_posts)
-        print(f"  collected {collected} posts")
+            # Phase 1 — posts only. No comment interceptor and no inline expansion:
+            # comment clicks during the scroll starved post collection and tripped
+            # Facebook's anti-bot (see docs/adr/0001-two-pass-crawl.md).
+            interceptor = FeedInterceptor(page, page_name=page_name)
+            interceptor.attach()
+            posts_url = cfg.normalized_page_url() + "posts/"
+            await page.goto(posts_url, wait_until="domcontentloaded", timeout=60000)
+            await _trigger_feed(page)
+            raw_posts = await collect_posts(page, interceptor, cfg)
+            collected = len(raw_posts)
+            print(f"  collected {collected} posts")
 
-        # Phase 2 — comments, one post at a time from its permalink, where the
-        # comment section isn't virtualized away. Written incrementally so a
-        # crash mid-pass keeps the posts already scraped.
-        comment_interceptor = CommentInterceptor(page)
-        comment_interceptor.attach()
-        for i, raw in enumerate(raw_posts, 1):
-            post_url = raw.get("permalink_url") or ""
-            post_id = raw.get("post_id") or ""
-            comments = await _scrape_post_comments(
-                page, comment_interceptor, post_url, post_id, cfg)
-            result = normalize_post(raw, page_name, comments)
-            added += write_posts([result], Path(cfg.output))
-            # Log only the scraped count. The feed's comment_count (total_count)
-            # is unreliable — it undercounts replies and overcounts deleted/spam/
-            # blocked-user comments — so printing N/M falsely implies M is the
-            # authoritative total. The raw count is still written to each post's
-            # "comments" field in the output JSON.
-            print(f"  [{i}/{collected}] {post_id}: {len(comments)} comments")
-
-        # Phase 3 — fetch the ~3 newest posts from an external API
-        # (scrapecreators -> apify) and merge only the ones the feed missed.
-        # New posts get the same comment crawl as a feed post; duplicates are
-        # skipped (the crawl's copy is richer than the API's).
-        recent_posts = await asyncio.to_thread(fetch_recent, cfg.page_url)
-        if recent_posts:
-            seen = existing_post_ids(Path(cfg.output))
-            new_posts = [p for p in recent_posts if p.post_id and p.post_id not in seen]
-            for j, post in enumerate(new_posts, 1):
+            # Phase 2 — comments, one post at a time from its permalink, where the
+            # comment section isn't virtualized away. Written incrementally so a
+            # crash mid-pass keeps the posts already scraped.
+            comment_interceptor = CommentInterceptor(page)
+            comment_interceptor.attach()
+            for i, raw in enumerate(raw_posts, 1):
+                post_url = raw.get("permalink_url") or ""
+                post_id = raw.get("post_id") or ""
                 comments = await _scrape_post_comments(
-                    page, comment_interceptor,
-                    post.facebook_url or "", post.post_id or "", cfg)
-                post.comments_list = [Comment(**c) for c in comments]
-                added += write_posts([post], Path(cfg.output))
-                print(f"  [recent {j}/{len(new_posts)}] {post.post_id}: {len(comments)} comments")
+                    page, comment_interceptor, post_url, post_id, cfg)
+                result = normalize_post(raw, page_name, comments)
+                added += write_posts([result], Path(cfg.output))
+                # Log only the scraped count. The feed's comment_count (total_count)
+                # is unreliable — it undercounts replies and overcounts deleted/spam/
+                # blocked-user comments — so printing N/M falsely implies M is the
+                # authoritative total. The raw count is still written to each post's
+                # "comments" field in the output JSON.
+                print(f"  [{i}/{collected}] {post_id}: {len(comments)} comments")
+
+            # Phase 3 — fetch the ~3 newest posts from an external API
+            # (scrapecreators -> apify) and merge only the ones the feed missed.
+            # New posts get the same comment crawl as a feed post; duplicates are
+            # skipped (the crawl's copy is richer than the API's).
+            recent_posts = await asyncio.to_thread(fetch_recent, cfg.page_url)
+            if recent_posts:
+                seen = existing_post_ids(Path(cfg.output))
+                new_posts = [p for p in recent_posts if p.post_id and p.post_id not in seen]
+                for j, post in enumerate(new_posts, 1):
+                    comments = await _scrape_post_comments(
+                        page, comment_interceptor,
+                        post.facebook_url or "", post.post_id or "", cfg)
+                    post.comments_list = [Comment(**c) for c in comments]
+                    added += write_posts([post], Path(cfg.output))
+                    print(f"  [recent {j}/{len(new_posts)}] {post.post_id}: {len(comments)} comments")
+    finally:
+        if log_task is not None:
+            log_task.cancel()
+            try:
+                await log_task
+            except asyncio.CancelledError:
+                pass
 
     print(f"collected {collected}, wrote {added} new -> {cfg.output}")
+    print(f"  [res] final {monitor.line()}")
 
 
 def main() -> None:
@@ -225,6 +250,7 @@ def main() -> None:
             delay_base=args.delay_base,
             delay_jitter=args.delay_jitter,
             storage_state=args.storage_state or os.getenv("FB_STORAGE_STATE"),
+            res_interval=args.res_interval,
         )
         print(f"\n== crawling {url} -> {cfg.output}")
         try:

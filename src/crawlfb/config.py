@@ -46,6 +46,7 @@ class Config:
     storage_state: str | None = None
     scroll_distance: int = 2000
     stall_limit: int = 5
+    res_interval: float = 15.0
 
     def normalized_page_url(self) -> str:
         return self.page_url.rstrip("/") + "/"
