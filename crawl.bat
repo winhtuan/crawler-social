@@ -6,7 +6,7 @@ rem ============================================================
 cd /d D:\capstone\brandhub\crawl-fb
 
 rem rotate proxy -> crawl -> upload (upload still runs on Ctrl+C)
-python run.py --max-posts 10
+python run.py --max-posts 100
 
 rem If headless is flagged, comment the line above and use:
 rem python run.py --max-posts 10 --headed
