@@ -8,14 +8,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 from crawlfb.config import Config, Proxy
 from crawlfb.stealth import launch_context
-from crawlfb.intercept import FeedInterceptor
+from crawlfb.intercept import FeedInterceptor, is_reel
 from crawlfb.paginate import collect_posts
 from crawlfb.comments import (
     CommentInterceptor, collect_comments, expand_comments,
     extract_comments_from_html, switch_to_all_comments, _reel_to_watch,
 )
 from crawlfb.normalize import normalize_post
-from crawlfb.writer import write_posts
+from crawlfb.writer import write_posts, checkpoint_posts
 from crawlfb.models import Comment
 from crawlfb.monitor import ResourceMonitor
 from crawlfb.recent import existing_post_ids, fetch_recent
@@ -153,6 +153,9 @@ async def _log_resources(monitor: ResourceMonitor, interval: float) -> None:
 async def run(cfg: Config) -> None:
     added = 0
     collected = 0
+    written_ids: set[str] = set()
+    interceptor = None
+    page_name = None
     monitor = ResourceMonitor()
     log_task = (
         asyncio.create_task(_log_resources(monitor, cfg.res_interval))
@@ -187,6 +190,7 @@ async def run(cfg: Config) -> None:
                     page, comment_interceptor, post_url, post_id, cfg)
                 result = normalize_post(raw, page_name, comments)
                 added += write_posts([result], Path(cfg.output))
+                written_ids.add(post_id)
                 # Log only the scraped count. The feed's comment_count (total_count)
                 # is unreliable — it undercounts replies and overcounts deleted/spam/
                 # blocked-user comments — so printing N/M falsely implies M is the
@@ -208,8 +212,20 @@ async def run(cfg: Config) -> None:
                         post.facebook_url or "", post.post_id or "", cfg)
                     post.comments_list = [Comment(**c) for c in comments]
                     added += write_posts([post], Path(cfg.output))
+                    written_ids.add(post.post_id)
                     print(f"  [recent {j}/{len(new_posts)}] {post.post_id}: {len(comments)} comments")
     finally:
+        # An interrupt mid-Phase-1 leaves posts in the interceptor but nothing on
+        # disk. Flush whatever hasn't been written yet (as empty-comment records)
+        # so a partial crawl still lands on disk and S3. Phase 2/3 posts already
+        # written are in written_ids and skipped. Reels are excluded — their
+        # comments live in a drawer (docs/adr/0002-exclude-reels.md).
+        if interceptor is not None and page_name is not None:
+            try:
+                raw = [p for p in interceptor.posts if not is_reel(p)]
+                checkpoint_posts(raw, page_name, Path(cfg.output), written_ids)
+            except Exception:
+                pass
         if log_task is not None:
             log_task.cancel()
             try:
