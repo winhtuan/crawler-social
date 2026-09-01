@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from crawlfb.models import Post
+from crawlfb.normalize import normalize_post
 
 
 def _load(path: Path) -> list[dict]:
@@ -34,3 +35,26 @@ def write_posts(posts: list[Post], path: Path) -> int:
         encoding="utf-8",
     )
     return added
+
+
+def checkpoint_posts(raw_posts: list[dict], page_name: str, output_path: Path,
+                     written_ids: set[str] | None = None) -> set[str]:
+    """Write the raw feed posts that haven't been written yet, as empty-comment
+    records, and return the updated set of written post_ids.
+
+    Phase 1 collects posts in memory only; on Ctrl+C mid-scroll the interceptor
+    holds every post seen so far but nothing is on disk. run() flushes those raw
+    posts through this in its finally so a partial crawl still lands on disk/S3.
+    Phase 2 later enriches each post with comments via write_posts (upsert by
+    post_id), which replaces the empty-comment record.
+    """
+    written = set(written_ids) if written_ids is not None else set()
+    posts = [
+        normalize_post(raw, page_name, [])
+        for raw in raw_posts
+        if raw.get("post_id") and raw.get("post_id") not in written
+    ]
+    if posts:
+        write_posts(posts, Path(output_path))
+        written.update(p.post_id for p in posts)
+    return written
