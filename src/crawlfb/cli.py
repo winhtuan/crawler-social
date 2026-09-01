@@ -115,7 +115,11 @@ async def _expand_post_comments(page, interceptor, post_id: str, cfg: Config) ->
 async def _scrape_post_comments(page, interceptor, post_url: str, post_id: str,
                                 cfg: Config) -> list[dict]:
     """Open a post's permalink and scrape its comments, retrying a failed load
-    twice before skipping — a deleted or private post must not sink the run."""
+    twice before skipping — a deleted or private post must not sink the run.
+
+    The comment-scrape phase (parse + expand + collect) is wrapped so a page
+    crash, a closed page, or a failing evaluate on one post degrades to 'no
+    comments for this post' instead of aborting the whole run."""
     if not post_url:
         return []
     # A reel permalink (/reel/<id>/) serves no comments; open the watch URL so
@@ -134,13 +138,20 @@ async def _scrape_post_comments(page, interceptor, post_url: str, post_id: str,
     # A permalink serves its comments in SSR HTML (data-sjs JSON), not in the
     # /api/graphql/ responses — those only carry total_count. Pull them from the
     # page markup; each comment's Relay id buckets it back to this post.
-    interceptor.add_nodes(extract_comments_from_html(await page.content()))
-    # The permalink defaults to 'Most relevant', hiding low-relevance comments.
-    # Switch to 'All comments' before expanding so they load too.
-    await switch_to_all_comments(page)
-    await asyncio.sleep(1.0)
-    await _expand_post_comments(page, interceptor, post_id, cfg)
-    return collect_comments(interceptor, post_url, post_id, cfg.max_comments)
+    try:
+        interceptor.add_nodes(extract_comments_from_html(await page.content()))
+        # The permalink defaults to 'Most relevant', hiding low-relevance comments.
+        # Switch to 'All comments' before expanding so they load too.
+        await switch_to_all_comments(page)
+        await asyncio.sleep(1.0)
+        await _expand_post_comments(page, interceptor, post_id, cfg)
+    except Exception as exc:
+        print(f"    warn {post_url}: comment scrape failed ({exc}); keeping partial")
+    try:
+        return collect_comments(interceptor, post_url, post_id, cfg.max_comments)
+    except Exception as exc:
+        print(f"    warn {post_url}: collect_comments failed ({exc})")
+        return []
 
 
 async def _log_resources(monitor: ResourceMonitor, interval: float) -> None:
