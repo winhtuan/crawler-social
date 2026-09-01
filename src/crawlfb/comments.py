@@ -455,6 +455,15 @@ async def expand_feed_topdown(page, cfg, steps: int = 16, rounds: int = 8) -> in
     return total
 
 
+def _sort_and_cap(records: list[dict], max_comments: int) -> list[dict]:
+    """Sort flat comment records by (likes, date) descending and cap at
+    max_comments (<=0 means no cap). Shared by collect_comments and the graphql
+    fetch path so both produce the same output shape."""
+    records.sort(key=lambda c: (c.get("likes") or 0, c.get("date") or ""), reverse=True)
+    limit = max_comments if max_comments > 0 else 10**9
+    return records[:limit]
+
+
 def collect_comments(interceptor: CommentInterceptor, post_url: str,
                      post_id: str, max_comments: int) -> list[dict]:
     """Return the comments bucketed to post_id by a populated CommentInterceptor
@@ -468,6 +477,4 @@ def collect_comments(interceptor: CommentInterceptor, post_url: str,
         if post_url:
             c["comment_url"] = f"{post_url}?comment_id={c['comment_id']}"
         out.append(c)
-    out.sort(key=lambda c: (c.get("likes") or 0, c.get("date") or ""), reverse=True)
-    limit = max_comments if max_comments > 0 else 10**9
-    return out[:limit]
+    return _sort_and_cap(out, max_comments)

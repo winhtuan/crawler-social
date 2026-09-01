@@ -37,6 +37,7 @@ def test_load_pages_missing_file(tmp_path):
 import asyncio
 from crawlfb.cli import _scrape_post_comments
 from crawlfb.comments import CommentInterceptor
+from crawlfb.comment_api import GraphQLForm
 from crawlfb.config import Config
 
 
@@ -67,7 +68,7 @@ def test_scrape_post_comments_survives_page_content_crash():
     page = _GotoOkPage()
     interceptor = CommentInterceptor(page)
     comments = asyncio.run(_scrape_post_comments(
-        page, interceptor, "https://www.facebook.com/p/posts/1", "1", _cfg()))
+        page, interceptor, "https://www.facebook.com/p/posts/1", "1", _cfg(), GraphQLForm()))
     assert comments == []
 
 
@@ -75,7 +76,7 @@ def test_scrape_post_comments_survives_evaluate_crash():
     page = _EvalBoomPage()
     interceptor = CommentInterceptor(page)
     comments = asyncio.run(_scrape_post_comments(
-        page, interceptor, "https://www.facebook.com/p/posts/1", "1", _cfg()))
+        page, interceptor, "https://www.facebook.com/p/posts/1", "1", _cfg(), GraphQLForm()))
     assert comments == []
 
 

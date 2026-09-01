@@ -17,6 +17,7 @@ from crawlfb.comments import (
     CommentInterceptor, collect_comments, expand_comments,
     extract_comments_from_html, switch_to_all_comments, _reel_to_watch,
 )
+from crawlfb.comment_api import GraphQLForm, fetch_comments, records_from_nodes
 from crawlfb.normalize import normalize_post
 from crawlfb.writer import write_posts, checkpoint_posts
 from crawlfb.models import Comment
@@ -122,15 +123,28 @@ async def _expand_post_comments(page, interceptor, post_id: str, cfg: Config) ->
 
 
 async def _scrape_post_comments(page, interceptor, post_url: str, post_id: str,
-                                cfg: Config) -> list[dict]:
-    """Open a post's permalink and scrape its comments, retrying a failed load
-    twice before skipping — a deleted or private post must not sink the run.
+                                cfg: Config, form_capture: GraphQLForm) -> list[dict]:
+    """Scrape one post's comments, retrying a failed load before skipping — a
+    deleted or private post must not sink the run.
 
-    The comment-scrape phase (parse + expand + collect) is wrapped so a page
-    crash, a closed page, or a failing evaluate on one post degrades to 'no
-    comments for this post' instead of aborting the whole run."""
-    if not post_url:
+    Once the session form is captured (the first permalink nav fires the comment
+    root query), comments are fetched by replaying the comment GraphQL queries
+    in-page — no per-post goto/scroll. The reverse-engineered commentsIntentToken
+    already selects 'All comments', so the sort switch is skipped too. The
+    permalink + scroll path stays as the fallback: it bootstraps the form on the
+    first post and rescues any post whose fetch fails.
+
+    The whole phase is wrapped so a page crash, a closed page, or a failing
+    evaluate on one post degrades to 'no comments for this post' instead of
+    aborting the run."""
+    if not post_id or not post_url:
         return []
+    if form_capture.form is not None:
+        try:
+            nodes = await fetch_comments(page, form_capture.form, post_id)
+            return records_from_nodes(nodes, post_url, cfg.max_comments)
+        except Exception as exc:
+            print(f"    warn {post_url}: graphql fetch failed ({exc}); falling back")
     # A reel permalink (/reel/<id>/) serves no comments; open the watch URL so
     # the comment section renders. comment_urls below still point at the
     # canonical post_url.
@@ -249,6 +263,11 @@ async def _crawl_session(
             # deadline so the session relaunches with a fresh proxy and continues.
             comment_interceptor = CommentInterceptor(page)
             comment_interceptor.attach()
+            # Captures the session's /api/graphql/ form envelope from the first
+            # comment root query (fired by the first permalink nav in Phase 2) so
+            # later posts can replay comment queries without navigating.
+            form_capture = GraphQLForm()
+            form_capture.attach(page)
             timed_out = False
             for raw in raw_posts:
                 post_id = raw.get("post_id") or ""
@@ -264,7 +283,7 @@ async def _crawl_session(
                     break
                 post_url = raw.get("permalink_url") or ""
                 comments = await _scrape_post_comments(
-                    page, comment_interceptor, post_url, post_id, cfg)
+                    page, comment_interceptor, post_url, post_id, cfg, form_capture)
                 result = normalize_post(raw, page_name, comments)
                 added += write_posts([result], output)
                 written_ids.add(post_id)
@@ -290,7 +309,7 @@ async def _crawl_session(
                     for post in new_posts:
                         comments = await _scrape_post_comments(
                             page, comment_interceptor,
-                            post.facebook_url or "", post.post_id or "", cfg)
+                            post.facebook_url or "", post.post_id or "", cfg, form_capture)
                         post.comments_list = [Comment(**c) for c in comments]
                         added += write_posts([post], output)
                         written_ids.add(post.post_id)
