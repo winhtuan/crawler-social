@@ -5,9 +5,9 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 from dotenv import load_dotenv
 from crawlfb.config import Config, Proxy
 from crawlfb.stealth import launch_context
@@ -22,6 +22,10 @@ from crawlfb.writer import write_posts, checkpoint_posts
 from crawlfb.models import Comment
 from crawlfb.monitor import ResourceMonitor
 from crawlfb.recent import existing_post_ids, fetch_recent
+from crawlfb.feed_checkpoint import (
+    PENDING, DONE, checkpoint_path, build_records, save as save_checkpoint,
+    load as load_checkpoint,
+)
 
 
 def _page_id(url: str) -> str:
@@ -174,121 +178,193 @@ def _rotate_proxy_script() -> Path:
 
 def _run_rotate_proxy() -> None:
     """Rotate the KiotProxy by running tools/rotate_proxy.py, which writes the
-    fresh HTTP_PROXY into .env. Only affects the next crawl — the running
-    browser keeps the proxy it launched with."""
+    fresh HTTP_PROXY into .env. The running browser keeps the proxy it launched
+    with, so run() relaunches after rotating."""
     subprocess.run([sys.executable, str(_rotate_proxy_script())], check=False)
 
 
-async def _rotate_proxy_after(minutes: float, runner: Callable[[], None]) -> None:
-    """One-shot proxy rotation: sleep `minutes`, then invoke `runner` once.
-
-    No-op when `minutes <= 0`. The runner is the blocking KiotProxy subprocess,
-    offloaded to a thread so it doesn't stall the crawl's event loop."""
-    if minutes <= 0:
-        return
-    await asyncio.sleep(minutes * 60)
-    await asyncio.to_thread(runner)
+def _reload_proxy() -> Proxy | None:
+    """Re-read HTTP_PROXY from .env after a rotation. rotate_proxy.py rewrote
+    .env with the fresh proxy; the crawl loaded .env once at startup, so force a
+    re-load and re-parse. Returns None when .env has no HTTP_PROXY."""
+    load_dotenv(override=True)
+    return Proxy.from_url(os.getenv("HTTP_PROXY"))
 
 
-async def run(cfg: Config) -> None:
+async def _crawl_session(
+    cfg: Config,
+    page_name: str,
+    output: Path,
+    written_ids: set[str],
+    checkpoint: Path,
+    resume: bool,
+) -> tuple[int, bool, int]:
+    """One browser session with the current proxy: Phase 1 (feed scroll) ->
+    Phase 2 (comments) -> Phase 3 (API backfill).
+
+    Returns (posts_written, all_done, feed_count). Posts already in
+    `written_ids` are skipped, so a relaunched session resumes where the last
+    one stopped. Returns all_done=False when the rotation deadline was reached
+    with posts still pending, so run() relaunches with a fresh proxy and
+    continues. On interrupt/exception, unwritten Phase-1 posts are flushed as
+    empty-comment records (best effort) before the exception propagates.
+
+    `resume` skips the Phase 1 feed scroll entirely: the post list (with
+    crawl_status) is already in `checkpoint`, so a relaunched session goes
+    straight to scraping the posts still marked pending."""
+    # A fixed --proxy (not from .env) never rotates, so there's no deadline to
+    # relaunch for — one session runs to completion.
+    rotate_seconds = cfg.proxy_rotate_minutes * 60 if cfg.proxy_from_env else 0
+    session_start = time.monotonic()
     added = 0
-    collected = 0
-    written_ids: set[str] = set()
     interceptor = None
-    page_name = None
-    monitor = ResourceMonitor()
-    log_task = (
-        asyncio.create_task(_log_resources(monitor, cfg.res_interval))
-        if cfg.res_interval > 0
-        else None
-    )
-    rotate_task = (
-        asyncio.create_task(_rotate_proxy_after(cfg.proxy_rotate_minutes, _run_rotate_proxy))
-        if cfg.proxy_rotate_minutes > 0
-        else None
-    )
+    completed = False
     try:
         async with launch_context(cfg) as (_ctx, page):
-            page_name = _page_id(cfg.page_url)
-
             # Phase 1 — posts only. No comment interceptor and no inline expansion:
             # comment clicks during the scroll starved post collection and tripped
-            # Facebook's anti-bot (see docs/adr/0001-two-pass-crawl.md).
-            interceptor = FeedInterceptor(page, page_name=page_name)
-            interceptor.attach()
-            posts_url = cfg.normalized_page_url() + "posts/"
-            await page.goto(posts_url, wait_until="domcontentloaded", timeout=60000)
-            await _trigger_feed(page)
-            raw_posts = await collect_posts(page, interceptor, cfg)
-            # The feed interceptor has no role after Phase 1 — detach it so it
-            # stops appending Story nodes during Phase 2/3 comment navigation.
-            interceptor.detach()
+            # Facebook's anti-bot (see docs/adr/0001-two-pass-crawl.md). On resume
+            # the feed list is already persisted, so this scroll is skipped.
+            if resume:
+                raw_posts = load_checkpoint(checkpoint)
+            else:
+                raw_posts = []
+            if not raw_posts:
+                interceptor = FeedInterceptor(page, page_name=page_name)
+                interceptor.attach()
+                posts_url = cfg.normalized_page_url() + "posts/"
+                await page.goto(posts_url, wait_until="domcontentloaded", timeout=60000)
+                await _trigger_feed(page)
+                raw_posts = build_records(await collect_posts(page, interceptor, cfg))
+                # The feed interceptor has no role after Phase 1 — detach it so it
+                # stops appending Story nodes during Phase 2/3 comment navigation.
+                interceptor.detach()
+                save_checkpoint(raw_posts, checkpoint)
             collected = len(raw_posts)
-            print(f"  collected {collected} posts")
+            print(f"  {'resumed' if resume else 'collected'} {collected} posts")
 
             # Phase 2 — comments, one post at a time from its permalink, where the
             # comment section isn't virtualized away. Written incrementally so a
-            # crash mid-pass keeps the posts already scraped.
+            # crash mid-pass keeps the posts already scraped. Break at the rotation
+            # deadline so the session relaunches with a fresh proxy and continues.
             comment_interceptor = CommentInterceptor(page)
             comment_interceptor.attach()
-            for i, raw in enumerate(raw_posts, 1):
-                post_url = raw.get("permalink_url") or ""
+            timed_out = False
+            for raw in raw_posts:
                 post_id = raw.get("post_id") or ""
+                if raw.get("crawl_status") == DONE:
+                    continue
+                if post_id and post_id in written_ids:
+                    # Written by an earlier session (or a crash flush) — mark it
+                    # done in the checkpoint so a later resume skips it too.
+                    raw["crawl_status"] = DONE
+                    continue
+                if rotate_seconds > 0 and (time.monotonic() - session_start) >= rotate_seconds:
+                    timed_out = True
+                    break
+                post_url = raw.get("permalink_url") or ""
                 comments = await _scrape_post_comments(
                     page, comment_interceptor, post_url, post_id, cfg)
                 result = normalize_post(raw, page_name, comments)
-                added += write_posts([result], Path(cfg.output))
+                added += write_posts([result], output)
                 written_ids.add(post_id)
+                raw["crawl_status"] = DONE
+                save_checkpoint(raw_posts, checkpoint)
                 # Log only the scraped count. The feed's comment_count (total_count)
                 # is unreliable — it undercounts replies and overcounts deleted/spam/
                 # blocked-user comments — so printing N/M falsely implies M is the
                 # authoritative total. The raw count is still written to each post's
                 # "comments" field in the output JSON.
-                print(f"  [{i}/{collected}] {post_id}: {len(comments)} comments")
+                print(f"  {post_id}: {len(comments)} comments")
 
             # Phase 3 — fetch the ~3 newest posts from an external API
             # (scrapecreators -> apify) and merge only the ones the feed missed.
             # New posts get the same comment crawl as a feed post; duplicates are
-            # skipped (the crawl's copy is richer than the API's).
-            recent_posts = await asyncio.to_thread(fetch_recent, cfg.page_url)
-            if recent_posts:
-                seen = existing_post_ids(Path(cfg.output))
-                new_posts = [p for p in recent_posts if p.post_id and p.post_id not in seen]
-                for j, post in enumerate(new_posts, 1):
-                    comments = await _scrape_post_comments(
-                        page, comment_interceptor,
-                        post.facebook_url or "", post.post_id or "", cfg)
-                    post.comments_list = [Comment(**c) for c in comments]
-                    added += write_posts([post], Path(cfg.output))
-                    written_ids.add(post.post_id)
-                    print(f"  [recent {j}/{len(new_posts)}] {post.post_id}: {len(comments)} comments")
+            # skipped (the crawl's copy is richer than the API's). Runs only when
+            # Phase 2 completed this session — a timed-out session returns early
+            # and the next session picks the remainder up.
+            if not timed_out:
+                recent_posts = await asyncio.to_thread(fetch_recent, cfg.page_url)
+                if recent_posts:
+                    new_posts = [p for p in recent_posts if p.post_id and p.post_id not in written_ids]
+                    for post in new_posts:
+                        comments = await _scrape_post_comments(
+                            page, comment_interceptor,
+                            post.facebook_url or "", post.post_id or "", cfg)
+                        post.comments_list = [Comment(**c) for c in comments]
+                        added += write_posts([post], output)
+                        written_ids.add(post.post_id)
+                        print(f"  [recent] {post.post_id}: {len(comments)} comments")
+
+            completed = True
+            return added, not timed_out, collected
     finally:
         # An interrupt mid-Phase-1 leaves posts in the interceptor but nothing on
         # disk. Flush whatever hasn't been written yet (as empty-comment records)
         # so a partial crawl still lands on disk and S3. Phase 2/3 posts already
         # written are in written_ids and skipped. Reels are excluded — their
         # comments live in a drawer (docs/adr/0002-exclude-reels.md).
-        if interceptor is not None and page_name is not None:
+        # This runs only on crash/interrupt: a clean rotation (timed_out) or
+        # completion returns normally, and flushing then would write the pending
+        # posts as empty-comment so the next session skips their comments.
+        if not completed and interceptor is not None:
             try:
                 # Cap like Phase 1 did: the final GraphQL batch can overshoot
                 # max_posts, and those overflow posts never entered Phase 2, so
                 # without the cap they'd flush as bogus empty-comment records.
                 raw = [p for p in interceptor.posts if not is_reel(p)][:cfg.max_posts]
-                checkpoint_posts(raw, page_name, Path(cfg.output), written_ids)
+                checkpoint_posts(raw, page_name, output, written_ids)
             except Exception as exc:
                 print(f"    warn: checkpoint flush failed ({exc})")
+
+
+async def run(cfg: Config) -> None:
+    added = 0
+    collected = 0
+    page_name = _page_id(cfg.page_url)
+    output = Path(cfg.output)
+    checkpoint = checkpoint_path(output)
+    # Resume across both process restarts (the output file already has posts)
+    # and mid-run proxy rotations (posts written by an earlier session).
+    written_ids = set(existing_post_ids(output))
+    monitor = ResourceMonitor()
+    log_task = (
+        asyncio.create_task(_log_resources(monitor, cfg.res_interval))
+        if cfg.res_interval > 0
+        else None
+    )
+
+    session = 0
+    done = False
+    try:
+        while not done:
+            session += 1
+            if session > 1 and cfg.proxy_from_env:
+                # The previous session's proxy is about to expire (KiotProxy ~30
+                # min lifetime). Rotate to a fresh one and relaunch the browser
+                # with it before continuing.
+                await asyncio.to_thread(_run_rotate_proxy)
+                cfg.proxy = _reload_proxy()
+            print(f"== session {session} (proxy: {cfg.proxy.server if cfg.proxy else 'none'})")
+            session_added, done, session_collected = await _crawl_session(
+                cfg, page_name, output, written_ids, checkpoint, resume=(session > 1))
+            added += session_added
+            collected = max(collected, session_collected)
+    finally:
         if log_task is not None:
             log_task.cancel()
             try:
                 await log_task
             except asyncio.CancelledError:
                 pass
-        if rotate_task is not None:
-            rotate_task.cancel()
-            try:
-                await rotate_task
-            except asyncio.CancelledError:
-                pass
+
+    # Crawl finished cleanly — the feed checkpoint is a resume artifact only, so
+    # drop it once every post is scraped. Kept on interrupt so a re-run resumes.
+    if done:
+        try:
+            checkpoint.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     print(f"collected {collected}, wrote {added} new -> {cfg.output}")
     print(f"  [res] final {monitor.line()}")
@@ -325,6 +401,7 @@ def main() -> None:
             storage_state=args.storage_state or os.getenv("FB_STORAGE_STATE"),
             res_interval=args.res_interval,
             proxy_rotate_minutes=args.proxy_rotate_minutes,
+            proxy_from_env=args.proxy is None,
         )
         print(f"\n== crawling {url} -> {cfg.output}")
         try:

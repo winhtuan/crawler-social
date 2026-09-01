@@ -48,6 +48,7 @@ class Config:
     stall_limit: int = 5
     res_interval: float = 15.0
     proxy_rotate_minutes: float = 22.0
+    proxy_from_env: bool = True
 
     def normalized_page_url(self) -> str:
         return self.page_url.rstrip("/") + "/"
