@@ -1,5 +1,6 @@
 import json
-from crawlfb.cli import _load_pages, _page_id
+from argparse import Namespace
+from crawlfb.cli import _load_pages, _page_id, _resolve_tuning
 
 
 def test_page_id_strips_trailing_slash():
@@ -87,3 +88,26 @@ def test_rotate_proxy_script_path_is_repo_tools():
     p = _rotate_proxy_script()
     assert p.name == "rotate_proxy.py"
     assert p.exists()
+
+
+def test_resolve_tuning_cli_over_env(monkeypatch):
+    monkeypatch.setenv("FB_MAX_POSTS", "10")
+    monkeypatch.setenv("FB_DELAY_BASE", "9.5")
+    args = Namespace(max_posts=25, delay_base=1.5, delay_jitter=None)
+    assert _resolve_tuning(args) == (25, 1.5, 2.0)
+
+
+def test_resolve_tuning_env_fallback(monkeypatch):
+    monkeypatch.setenv("FB_MAX_POSTS", "12")
+    monkeypatch.setenv("FB_DELAY_BASE", "7.0")
+    monkeypatch.setenv("FB_DELAY_JITTER", "3.0")
+    args = Namespace(max_posts=None, delay_base=None, delay_jitter=None)
+    assert _resolve_tuning(args) == (12, 7.0, 3.0)
+
+
+def test_resolve_tuning_defaults_and_bad_env(monkeypatch):
+    monkeypatch.setenv("FB_MAX_POSTS", "notanumber")
+    monkeypatch.delenv("FB_DELAY_BASE", raising=False)
+    monkeypatch.delenv("FB_DELAY_JITTER", raising=False)
+    args = Namespace(max_posts=None, delay_base=None, delay_jitter=None)
+    assert _resolve_tuning(args) == (50, 3.0, 2.0)

@@ -9,3 +9,4 @@ output/*
 *.egg-info/
 
 todo.md
+docs/crawl-flow.visual-check.*

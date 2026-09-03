@@ -4,27 +4,8 @@ import json
 import sys
 from pathlib import Path
 from crawlfb.config import Config
+from crawlfb.intercept import split_json_values
 from crawlfb.stealth import launch_context
-
-
-def split_json_values(text: str) -> list:
-    """Facebook graphql batch responses concatenate several JSON values with no
-    wrapping array, so resp.json() fails on them ("Extra data"). Split manually."""
-    dec = json.JSONDecoder()
-    out = []
-    i = 0
-    n = len(text)
-    while i < n:
-        while i < n and text[i] in " \r\n\t":
-            i += 1
-        if i >= n:
-            break
-        try:
-            obj, i = dec.raw_decode(text, i)
-            out.append(obj)
-        except json.JSONDecodeError:
-            i += 1
-    return out
 
 
 async def main(page_url: str, out: str) -> None:

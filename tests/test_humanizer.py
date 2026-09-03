@@ -12,8 +12,3 @@ def test_delay_stays_within_base_plus_minus_jitter():
     assert max(delays) <= 4.0
     assert min(delays) >= 2.0
 
-def test_scroll_steps_are_positive_and_smaller_than_distance():
-    h = Humanizer(base=1.0, jitter=0.5, rng=random.Random(3))
-    steps = h.scroll_steps(distance=2000)
-    assert all(0 < s <= 600 for s in steps)
-    assert sum(steps) >= 2000

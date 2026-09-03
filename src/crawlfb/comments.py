@@ -217,15 +217,6 @@ def extract_comments_from_html(html: str) -> list[dict]:
     return out
 
 
-def _permalink_key(url: str) -> str:
-    """Canonical key for a post/reel permalink: "posts/<pfbid>" or
-    "reel/<id>". Used to match a comment back to the post it belongs to."""
-    m = re.search(r"/(posts|reel|videos|watch)/([^/?#]+)", url)
-    if m:
-        return f"{m.group(1)}/{m.group(2)}"
-    return url.rstrip("/").rsplit("/", 1)[-1]
-
-
 def _reel_to_watch(url: str) -> str:
     """Rewrite a /reel/<id>/ permalink to /watch/?v=<id>.
 
@@ -240,13 +231,6 @@ def _reel_to_watch(url: str) -> str:
     return url
 
 
-def _comment_permalink(node: dict) -> str:
-    """The post permalink a comment belongs to, from its feedback.url (with the
-    ?comment_id= suffix stripped). Empty when absent."""
-    url = _deep_get(node, "feedback", "url") or ""
-    return url.split("?")[0]
-
-
 class CommentInterceptor:
     """Collects every Comment node from Facebook's in-browser GraphQL responses,
     flattened and keyed by numeric comment_id. The feed and 'view more' graphql
@@ -258,7 +242,9 @@ class CommentInterceptor:
     def __init__(self, page):
         self._page = page
         self.by_id: dict[str, dict] = {}
-        self.post_of: dict[str, str] = {}  # comment_id -> numeric post_id
+        # Owning post_id -> {comment_id: flattened comment}. Bucketing happens in
+        # add_nodes so comments_for_post is an O(1) lookup, not an O(n) scan.
+        self.by_post: dict[str, dict[str, dict]] = {}
 
     def attach(self) -> None:
         self._page.on("response", self._on_response)
@@ -270,8 +256,8 @@ class CommentInterceptor:
             pass
 
     def add_nodes(self, nodes: list[dict]) -> None:
-        """Merge raw Comment nodes into by_id (deduped, first wins), recording
-        each comment's owning post id (decoded from its Relay id)."""
+        """Merge raw Comment nodes into by_id (deduped, first wins), bucketing
+        each comment under its owning post id (decoded from its Relay id)."""
         for node in nodes:
             try:
                 c = flatten_comment(node, "")
@@ -283,15 +269,11 @@ class CommentInterceptor:
             self.by_id[cid] = c
             pid = _comment_post_id(node)
             if pid:
-                self.post_of[cid] = pid
+                self.by_post.setdefault(pid, {})[cid] = c
 
     def comments_for_post(self, post_id: str) -> dict[str, dict]:
         """Comments whose decoded owning post id matches post_id (numeric)."""
-        return {
-            cid: self.by_id[cid]
-            for cid, pid in self.post_of.items()
-            if post_id and pid == post_id
-        }
+        return self.by_post.get(post_id, {}) if post_id else {}
 
     async def _on_response(self, resp) -> None:
         if "/api/graphql/" not in resp.url or resp.status != 200:
@@ -303,6 +285,56 @@ class CommentInterceptor:
         self.add_nodes(extract_comments(split_json_values(text)))
 
 
+# Label-classifier regexes for 'view more comments/replies' buttons (vi/en).
+# Single source of truth: `_is_view_more_label` tests these in Python, and the
+# JS below embeds the exact same patterns, so the in-page behaviour is locked.
+_VIEW_MORE_START = r"^(xem|view|hiển thị)"
+_VIEW_MORE_KIND = r"(bình luận|nhận xét|câu trả lời|phản hồi|replies|reply|comment)"
+_COMPOSER_HINT = r"viết bình luận|write a comment|viết nhận xét"
+_VIEW_MORE_MAX_LEN = 90
+
+
+def _is_view_more_label(text: str) -> bool:
+    """True for a tight 'view more comments/replies' button label (vi/en): short
+    normalized text starting with xem/view/hiển thị, containing a comment/reply
+    word, and NOT the full-width comment composer placeholder."""
+    t = re.sub(r"\s+", " ", (text or "")).strip()
+    return (
+        re.search(_VIEW_MORE_START, t, re.I) is not None
+        and re.search(_VIEW_MORE_KIND, t, re.I) is not None
+        and len(t) < _VIEW_MORE_MAX_LEN
+        and re.search(_COMPOSER_HINT, t, re.I) is None
+    )
+
+
+_VIEW_MORE_JS = f"""() => {{
+    const norm = (t) => (t || '').replace(/\\s+/g, ' ').trim();
+    const isLabel = (t) =>
+        /{_VIEW_MORE_START}/i.test(t) &&
+        /{_VIEW_MORE_KIND}/i.test(t) &&
+        t.length < {_VIEW_MORE_MAX_LEN};
+    const els = [...document.querySelectorAll('span[dir="auto"], div[role="button"], a, [role="button"]')];
+    const clicked = new Set();
+    let n = 0;
+    for (const e of els) {{
+        const t = norm(e.textContent);
+        if (!isLabel(t)) continue;
+        // skip the full-width comment composer ("Viết bình luận...")
+        if (/{_COMPOSER_HINT}/i.test(t)) continue;
+        let c = e;
+        while (c && c.tagName !== 'BODY') {{
+            if (c.getAttribute('role') === 'button' || c.tagName === 'A') break;
+            c = c.parentElement;
+        }}
+        if (!c || c.tagName === 'BODY') c = e;
+        if (clicked.has(c)) continue;
+        clicked.add(c);
+        c.click(); n++;
+    }}
+    return n;
+}}"""
+
+
 async def _click_view_more(page) -> int:
     """Click every 'View more comments' AND 'View more replies' button currently
     in the DOM (vi/en). Returns how many were clicked. Matches only tight button
@@ -311,34 +343,7 @@ async def _click_view_more(page) -> int:
     the resolved clickable element (not by label text), so every post's button is
     clicked — the feed shows one 'Xem thêm bình luận' per post, and deduping by
     text would click only the first."""
-    return int(await page.evaluate(
-        """() => {
-            const norm = (t) => (t || '').replace(/\\s+/g, ' ').trim();
-            const isLabel = (t) =>
-                /^(xem|view|hiển thị)/i.test(t) &&
-                /(bình luận|nhận xét|câu trả lời|phản hồi|reply|comment)/i.test(t) &&
-                t.length < 90;
-            const els = [...document.querySelectorAll('span[dir="auto"], div[role="button"], a, [role="button"]')];
-            const clicked = new Set();
-            let n = 0;
-            for (const e of els) {
-                const t = norm(e.textContent);
-                if (!isLabel(t)) continue;
-                // skip the full-width comment composer ("Viết bình luận...")
-                if (/viết bình luận|write a comment|viết nhận xét/i.test(t)) continue;
-                let c = e;
-                while (c && c.tagName !== 'BODY') {
-                    if (c.getAttribute('role') === 'button' || c.tagName === 'A') break;
-                    c = c.parentElement;
-                }
-                if (!c || c.tagName === 'BODY') c = e;
-                if (clicked.has(c)) continue;
-                clicked.add(c);
-                c.click(); n++;
-            }
-            return n;
-        }"""
-    ))
+    return int(await page.evaluate(_VIEW_MORE_JS))
 
 
 async def scroll_comment_list(page) -> bool:
@@ -435,24 +440,6 @@ async def switch_to_all_comments(page) -> bool:
         return False
     return (await _click_exact_text(page, "Tất cả bình luận")
             or await _click_exact_text(page, "All comments"))
-
-
-async def expand_feed_topdown(page, cfg, steps: int = 16, rounds: int = 8) -> int:
-    """Expand comment sections top-to-bottom over the already-collected feed.
-    Feed virtualization drops a post's inline 'view more' button once it scrolls
-    out of view, so the collection pass only fully expands the posts near the
-    bottom. This re-walks the feed from the top, expanding each post's comments
-    while it is on screen, then scrolling down a step. Comments are bucketed by
-    post id, so the order does not matter."""
-    human = Humanizer(base=min(cfg.delay_base, 0.9), jitter=0.4)
-    total = 0
-    await page.evaluate("window.scrollTo(0, 0)")
-    await asyncio.sleep(1.5)
-    for _ in range(steps):
-        total += await expand_comments(page, cfg, rounds=rounds)
-        await page.evaluate("window.scrollBy(0, 700)")
-        await human.pause()
-    return total
 
 
 def _sort_and_cap(records: list[dict], max_comments: int) -> list[dict]:

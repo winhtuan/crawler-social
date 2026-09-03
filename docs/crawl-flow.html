@@ -5043,7 +5043,7 @@
 
 
         <!-- Edge paths -->
-        <path data-edge-from="comments" data-edge-to="facebook" data-edge-label="mở permalink → SSR" data-edge-key="0" data-edge-id="e-comments-fb" data-composition-points="709.2,202;709.2,280;504.6,280;504.6,388" d="M 709.2 202 L 709.2 280 L 504.6 280 L 504.6 388" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="comments" data-edge-to="facebook" data-edge-label="graphql replay · SSR fallback" data-edge-key="0" data-edge-id="e-comments-fb" data-composition-points="709.2,202;709.2,280;504.6,280;504.6,388" d="M 709.2 202 L 709.2 280 L 504.6 280 L 504.6 388" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="comments" data-edge-to="output" data-edge-label="write_posts · upsert" data-edge-key="1" data-edge-id="e-comments-output" data-composition-points="791.2,176;807.2,176;807.2,524;709.2,524;709.2,440" d="M 791.2 176 L 807.2 176 L 807.2 524 L 709.2 524 L 709.2 440" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="comments" data-edge-to="recent" data-edge-label="Phase 3" data-edge-key="2" data-edge-id="e-comments-recent" data-composition-points="791.2,169;842.8000000000001,169" d="M 791.2 169 L 842.8000000000001 169" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="entry" data-edge-to="launch" data-edge-key="3" data-edge-id="e-entry-launch" data-composition-points="198,176;226,176" d="M 198 176 L 226 176" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
@@ -5089,15 +5089,15 @@
           <text data-detail="context" x="504.6" y="188" class="t-muted" font-size="8" text-anchor="middle">cuộn → thu thập post</text>
         </g>
 
-        <g id="node-comments" data-node-id="comments" data-node-label="Phase 2 · Cào comment" tabindex="0" role="button" aria-label="Focus Phase 2 · Cào comment, permalink → mở rộng, Pipeline (run.py → crawlfb.cli)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="permalink → mở rộng" data-node-context="Pipeline (run.py → crawlfb.cli)">
-          <title>Phase 2 · Cào comment · permalink → mở rộng · Pipeline (run.py → crawlfb.cli)</title>
+        <g id="node-comments" data-node-id="comments" data-node-label="Phase 2 · Cào comment" tabindex="0" role="button" aria-label="Focus Phase 2 · Cào comment, replay graphql · SSR, Pipeline (run.py → crawlfb.cli)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="replay graphql · SSR" data-node-context="Pipeline (run.py → crawlfb.cli)">
+          <title>Phase 2 · Cào comment · replay graphql · SSR · Pipeline (run.py → crawlfb.cli)</title>
           <rect x="627.2" y="150" width="164" height="52" rx="6" class="c-mask"/>
           <rect x="627.2" y="150" width="164" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(633.2 156) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="709.2" y="171" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Phase 2 · Cào comment</text>
-          <text data-detail="context" x="709.2" y="188" class="t-muted" font-size="8" text-anchor="middle">permalink → mở rộng</text>
+          <text data-detail="context" x="709.2" y="188" class="t-muted" font-size="8" text-anchor="middle">replay graphql · SSR</text>
         </g>
 
         <g id="node-recent" data-node-id="recent" data-node-label="Phase 3 · Post gần nhất" tabindex="0" role="button" aria-label="Focus Phase 3 · Post gần nhất, API bù post bỏ sót, Pipeline (run.py → crawlfb.cli)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="API bù post bỏ sót" data-node-context="Pipeline (run.py → crawlfb.cli)">
@@ -5171,9 +5171,9 @@
         </g>
 
         <!-- Edge labels -->
-        <g data-detail="context" data-edge-from="comments" data-edge-to="facebook" data-edge-label="mở permalink → SSR" data-edge-key="0" data-edge-id="e-comments-fb">
-          <rect x="558.7" y="260" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="606.9000000000001" y="270" class="t-muted" font-size="8" text-anchor="middle">mở permalink → SSR</text>
+        <g data-detail="context" data-edge-from="comments" data-edge-to="facebook" data-edge-label="graphql replay · SSR fallback" data-edge-key="0" data-edge-id="e-comments-fb">
+          <rect x="532.3000000000001" y="260" width="149.2" height="14" rx="3" class="c-mask"/>
+          <text x="606.9000000000001" y="270" class="t-muted" font-size="8" text-anchor="middle">graphql replay · SSR fallback</text>
         </g>
         <g data-detail="context" data-edge-from="comments" data-edge-to="output" data-edge-label="write_posts · upsert" data-edge-key="1" data-edge-id="e-comments-output">
           <rect x="705.2" y="504" width="106" height="14" rx="3" class="c-mask"/>

@@ -39,6 +39,9 @@ def normalize_post(raw: dict, page_name: str, comments: list[dict] | None = None
     reactions = _reactions(raw)
     attachments = [Attachment(**a) for a in raw.get("attachments") or []]
     comments_list = [Comment(**c) for c in comments]
+    # Top comment is the single most-liked one. `comments` arrive sorted by
+    # likes desc, so `comments[:1]` grabs it; the empty slice covers the
+    # no-comments case.
     top_comments = [
         TopComment(
             text=c.get("text") or "",

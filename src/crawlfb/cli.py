@@ -21,7 +21,6 @@ from crawlfb.comment_api import GraphQLForm, fetch_comments, records_from_nodes
 from crawlfb.normalize import normalize_post
 from crawlfb.writer import write_posts, checkpoint_posts
 from crawlfb.models import Comment
-from crawlfb.monitor import ResourceMonitor
 from crawlfb.recent import existing_post_ids, fetch_recent
 from crawlfb.feed_checkpoint import (
     PENDING, DONE, checkpoint_path, build_records, save as save_checkpoint,
@@ -61,6 +60,30 @@ def _load_pages(path: str | Path) -> list[tuple[str, str]]:
     return out
 
 
+def _env_num(name: str, default, cast):
+    """Read `name` from the environment, falling back to `default` when unset or
+    not parseable by `cast`. Kept separate so a malformed env value degrades to
+    the default instead of crashing the run."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return cast(raw)
+    except (ValueError, TypeError):
+        return default
+
+
+def _resolve_tuning(args) -> tuple[int, float, float]:
+    """Resolve max_posts / delay_base / delay_jitter with CLI > env > default
+    precedence. argparse defaults these flags to None so an unset flag falls
+    through to the FB_* env vars documented in .env.example."""
+    return (
+        args.max_posts if args.max_posts is not None else _env_num("FB_MAX_POSTS", 50, int),
+        args.delay_base if args.delay_base is not None else _env_num("FB_DELAY_BASE", 3.0, float),
+        args.delay_jitter if args.delay_jitter is not None else _env_num("FB_DELAY_JITTER", 2.0, float),
+    )
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Crawl public Facebook page posts")
     p.add_argument("--page", default=None,
@@ -69,7 +92,8 @@ def parse_args() -> argparse.Namespace:
                    help="JSON list of pages to crawl (default data/fb_pages.json)")
     p.add_argument("--output", default="output",
                    help="output directory; mỗi page ghi output/{id}.json")
-    p.add_argument("--max-posts", type=int, default=50)
+    p.add_argument("--max-posts", type=int, default=None,
+                   help="max posts per page (default 50 or FB_MAX_POSTS)")
     p.add_argument("--max-comments", type=int, default=200,
                    help="max comments per post (default 200; 0 = no cap)")
     p.add_argument("--headless", action="store_true", default=True)
@@ -78,11 +102,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-humanize", dest="humanize", action="store_false", default=True,
                    help="disable human-like input (faster, less stealthy)")
     p.add_argument("--proxy", default=None, help="http://user:pass@host:port")
-    p.add_argument("--delay-base", type=float, default=3.0)
-    p.add_argument("--delay-jitter", type=float, default=2.0)
+    p.add_argument("--delay-base", type=float, default=None,
+                   help="base delay seconds (default 3.0 or FB_DELAY_BASE)")
+    p.add_argument("--delay-jitter", type=float, default=None,
+                   help="delay jitter seconds (default 2.0 or FB_DELAY_JITTER)")
     p.add_argument("--storage-state", default=None)
-    p.add_argument("--res-interval", type=float, default=15.0,
-                   help="seconds between CPU/RAM log lines (0 disables)")
     p.add_argument("--proxy-rotate-minutes", type=float, default=22.0,
                    help="rotate proxy after this many minutes mid-run (0 disables)")
     return p.parse_args()
@@ -175,13 +199,6 @@ async def _scrape_post_comments(page, interceptor, post_url: str, post_id: str,
     except Exception as exc:
         print(f"    warn {post_url}: collect_comments failed ({exc})")
         return []
-
-
-async def _log_resources(monitor: ResourceMonitor, interval: float) -> None:
-    """Log CPU/RAM every `interval` seconds until cancelled."""
-    while True:
-        await asyncio.sleep(interval)
-        print(f"  [res] {monitor.line()}")
 
 
 def _rotate_proxy_script() -> Path:
@@ -346,36 +363,22 @@ async def run(cfg: Config) -> None:
     # Resume across both process restarts (the output file already has posts)
     # and mid-run proxy rotations (posts written by an earlier session).
     written_ids = set(existing_post_ids(output))
-    monitor = ResourceMonitor()
-    log_task = (
-        asyncio.create_task(_log_resources(monitor, cfg.res_interval))
-        if cfg.res_interval > 0
-        else None
-    )
 
     session = 0
     done = False
-    try:
-        while not done:
-            session += 1
-            if session > 1 and cfg.proxy_from_env:
-                # The previous session's proxy is about to expire (KiotProxy ~30
-                # min lifetime). Rotate to a fresh one and relaunch the browser
-                # with it before continuing.
-                await asyncio.to_thread(_run_rotate_proxy)
-                cfg.proxy = _reload_proxy()
-            print(f"== session {session} (proxy: {cfg.proxy.server if cfg.proxy else 'none'})")
-            session_added, done, session_collected = await _crawl_session(
-                cfg, page_name, output, written_ids, checkpoint, resume=(session > 1))
-            added += session_added
-            collected = max(collected, session_collected)
-    finally:
-        if log_task is not None:
-            log_task.cancel()
-            try:
-                await log_task
-            except asyncio.CancelledError:
-                pass
+    while not done:
+        session += 1
+        if session > 1 and cfg.proxy_from_env:
+            # The previous session's proxy is about to expire (KiotProxy ~30
+            # min lifetime). Rotate to a fresh one and relaunch the browser
+            # with it before continuing.
+            await asyncio.to_thread(_run_rotate_proxy)
+            cfg.proxy = _reload_proxy()
+        print(f"== session {session} (proxy: {cfg.proxy.server if cfg.proxy else 'none'})")
+        session_added, done, session_collected = await _crawl_session(
+            cfg, page_name, output, written_ids, checkpoint, resume=(session > 1))
+        added += session_added
+        collected = max(collected, session_collected)
 
     # Crawl finished cleanly — the feed checkpoint is a resume artifact only, so
     # drop it once every post is scraped. Kept on interrupt so a re-run resumes.
@@ -386,7 +389,6 @@ async def run(cfg: Config) -> None:
             pass
 
     print(f"collected {collected}, wrote {added} new -> {cfg.output}")
-    print(f"  [res] final {monitor.line()}")
 
 
 def main() -> None:
@@ -405,20 +407,20 @@ def main() -> None:
         return
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    max_posts, delay_base, delay_jitter = _resolve_tuning(args)
 
     for pid, url in tasks:
         cfg = Config(
             page_url=url,
             output=str(output_dir / f"{pid}_{run_id}.json"),
-            max_posts=args.max_posts,
+            max_posts=max_posts,
             max_comments=args.max_comments,
             headless=args.headless,
             humanize=args.humanize,
             proxy=Proxy.from_url(args.proxy or os.getenv("HTTP_PROXY")),
-            delay_base=args.delay_base,
-            delay_jitter=args.delay_jitter,
+            delay_base=delay_base,
+            delay_jitter=delay_jitter,
             storage_state=args.storage_state or os.getenv("FB_STORAGE_STATE"),
-            res_interval=args.res_interval,
             proxy_rotate_minutes=args.proxy_rotate_minutes,
             proxy_from_env=args.proxy is None,
         )

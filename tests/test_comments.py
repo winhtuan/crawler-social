@@ -7,8 +7,6 @@ from crawlfb.comments import (
     _comment_id,
     _is_real_comment,
     _comment_post_id,
-    _permalink_key,
-    _comment_permalink,
     _reel_to_watch,
     CommentInterceptor,
     collect_comments,
@@ -153,16 +151,6 @@ def test_comment_post_id_plain_underscore():
     assert _comment_post_id({"id": "1122_1781"}) == "1122"
 
 
-def test_permalink_key_posts_and_reel():
-    assert _permalink_key("https://www.facebook.com/cotsongGenZ.YAN/posts/pfbid02abc/") == "posts/pfbid02abc"
-    assert _permalink_key("https://www.facebook.com/cotsongGenZ.YAN/reel/1429282285711985/") == "reel/1429282285711985"
-
-
-def test_comment_permalink_strips_comment_id():
-    node = {"feedback": {"url": "https://www.facebook.com/x/posts/pfbid02abc/?comment_id=1049626554740220"}}
-    assert _comment_permalink(node) == "https://www.facebook.com/x/posts/pfbid02abc/"
-
-
 def test_reel_to_watch_rewrites_reel_url():
     assert _reel_to_watch("https://www.facebook.com/reel/910068878409278/") == \
         "https://www.facebook.com/watch/?v=910068878409278"
@@ -223,3 +211,18 @@ def test_add_nodes_buckets_ssr_html_comment_by_relay_id():
     inter.add_nodes([node])
     got = inter.comments_for_post("1122365663449579")
     assert got["1781129452904905"]["text"] == "ssr comment"
+
+
+def test_comments_for_post_isolates_by_post():
+    # Two posts, each with one comment — comments_for_post must return only the
+    # owning post's comments (no cross-post leakage from the by_post bucket).
+    inter = CommentInterceptor(None)
+    inter.add_nodes([_node(
+        legacy_fbid="c1", id="comment:111_1001", body={"text": "post 1"},
+    )])
+    inter.add_nodes([_node(
+        legacy_fbid="c2", id="comment:222_2002", body={"text": "post 2"},
+    )])
+    assert [c["comment_id"] for c in inter.comments_for_post("111").values()] == ["c1"]
+    assert [c["comment_id"] for c in inter.comments_for_post("222").values()] == ["c2"]
+    assert inter.comments_for_post("999") == {}
