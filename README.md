@@ -46,6 +46,26 @@ Chạy crawl đơn lẻ (không đổi proxy, không upload):
 python -m crawlfb.cli --page "https://www.facebook.com/Page/" --max-posts 50
 ```
 
+## Schedule (crawl tự động)
+
+Chạy cron trong nền, cào toàn bộ `data/fb_pages.json` mỗi khi tới giờ:
+
+```bash
+python -m crawlfb.scheduler
+```
+
+Sửa `schedule.json` để đổi giờ (không cần restart — scheduler tự nạp lại khi file đổi):
+
+```json
+{"enabled": true, "cron": "0 2 * * *"}
+```
+
+Mỗi lần fire chạy đúng pipeline `run.py` (đổi proxy → crawl → upload S3). Đang cào thì fire trùng bị skip. Chạy thử 1 lần ngay rồi thoát:
+
+```bash
+python -m crawlfb.scheduler --once
+```
+
 ## Output
 
 - Local: `output/{id}_{run_id}.json`
